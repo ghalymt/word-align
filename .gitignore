@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+# Audio / media inputs & outputs
+*.wav
+*.mp3
+*.mp4
+*.mkv
+*.m4a
+*.srt
+!examples/**/*.srt
+# Engine artifacts
+# (Vosk and MFA scratch dirs now live in the system temp dir, but older
+#  runs may have left these behind in the working directory.)
+temp_vosk_chunks_*/
+wordalign_vosk_*/
+mfa_surgical_*/
+models/
+.cache/

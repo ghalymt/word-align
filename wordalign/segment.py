@@ -1,0 +1,325 @@
+"""Sentence segmentation: transcript lines -> broadcast-quality subtitle blocks.
+
+Three phases run inside an iterative sweep with a growing character budget
+(1..MAX_CPL), which lets small merges happen early and prevents greedy
+over-merging:
+    phase 1  merge lines up to sentence boundaries (capitalization-aware)
+    phase 2  merge short fragments under CPL/duration limits
+    phase 3  balance each block into visually even lines
+"""
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Optional
+
+from .config import (CLAUSE_MARKERS, ITERATION_END, ITERATION_START, MAX_CPL,
+                     MAX_DURATION_MS, MIN_LINE_RATIO, PREFER_NEW_LINE_WORDS)
+from .utils import (count_visible_characters, has_terminal_punctuation,
+                    ms_to_time, normalize_word, time_to_ms)
+
+# The sweep's current character budget (module-level by design: the phase
+# functions consult it every call while cli drives it from 1 to MAX_CPL).
+_current_max_chars = MAX_CPL
+
+
+def set_max_chars(value: int) -> None:
+    global _current_max_chars
+    _current_max_chars = value
+
+
+def is_protected_phrase(text: str, split_pos: int) -> bool:
+    protected_phrases = ["a little bit"]
+    lower_text = text.lower()
+    for phrase in protected_phrases:
+        start = 0
+        while True:
+            idx = lower_text.find(phrase, start)
+            if idx == -1:
+                break
+            if idx < split_pos < idx + len(phrase):
+                return True
+            start = idx + 1
+    return False
+
+
+def evaluate_split(text: str, pos: int, total_len: int) -> Optional[dict]:
+    if is_protected_phrase(text, pos):
+        return None
+    line1 = text[:pos].strip()
+    line2 = text[pos:].strip()
+    l1 = count_visible_characters(line1)
+    l2 = count_visible_characters(line2)
+    if l1 > MAX_CPL or l2 > MAX_CPL:
+        return None
+    if l2 < 2:
+        return None
+    if line2 and line2[0] in ",;:!?…。！？‥":
+        return None
+    if line1 and line1[-1] in "([{«":
+        return None
+    if l1 < (total_len * MIN_LINE_RATIO) or l2 < (total_len * MIN_LINE_RATIO):
+        return None
+    balance_penalty = abs(l1 - l2)
+    w2 = line2.split()[0].lower().rstrip(",.;") if line2 else ""
+    w1 = line1.split()[-1].lower().rstrip(",.;") if line1 else ""
+    score = balance_penalty
+    if w2 in PREFER_NEW_LINE_WORDS:
+        score -= 5
+    if w1 in PREFER_NEW_LINE_WORDS:
+        score += 15
+    if w2 in CLAUSE_MARKERS["conjunctions"]:
+        score -= 3
+    return {"pos": pos, "score": score, "l1": line1, "l2": line2}
+
+
+def check_if_text_can_be_split_prettily(text: str) -> bool:
+    text = text.replace("\n", " ").strip()
+    total_len = count_visible_characters(text)
+    if total_len <= MAX_CPL:
+        return True
+    if total_len > (MAX_CPL * 2):
+        return False
+    for i in range(1, len(text)):
+        if text[i] == " " and evaluate_split(text, i, total_len) is not None:
+            return True
+    return False
+
+
+def find_word_boundary_near_limit(text: str, max_pos: int) -> int:
+    pos = min(max_pos, len(text) - 1)
+    while pos > 0:
+        if text[pos] == " ":
+            return pos + 1
+        pos -= 1
+    return max_pos
+
+
+def balance_block_enhanced(text: str) -> str:
+    text = text.replace("\n", " ").strip()
+    if len(text) <= MAX_CPL:
+        return text
+    candidates = []
+    for i in range(1, len(text)):
+        if text[i] == " ":
+            c = evaluate_split(text, i, len(text))
+            if c:
+                candidates.append(c)
+    if candidates:
+        best = min(candidates, key=lambda x: x["score"])
+        return f"{best['l1']}\n{best['l2']}"
+    best_break = find_word_boundary_near_limit(text, MAX_CPL)
+    return f"{text[:best_break].strip()}\n{text[best_break:].strip()}"
+
+
+def is_eligible_sentence(sentence_text: str, start_time: str,
+                         end_time: str) -> bool:
+    if count_visible_characters(sentence_text) >= _current_max_chars:
+        return False
+    if not check_if_text_can_be_split_prettily(sentence_text):
+        return False
+    duration_ms = time_to_ms(end_time) - time_to_ms(start_time)
+    if duration_ms >= MAX_DURATION_MS:
+        return False
+    return True
+
+
+def shift_dangling_words(segments: List[Dict]) -> List[Dict]:
+    for i in range(len(segments) - 1):
+        curr_text = segments[i]["text"].strip()
+        next_text = segments[i + 1]["text"].strip()
+        match = re.search(r"(.*,\s)([^,.\s!?]+)$", curr_text, re.DOTALL)
+        if match:
+            prefix = match.group(1).strip()
+            dangler = match.group(2).strip()
+            if not dangler or len(dangler) > 20:
+                continue
+            segments[i]["text"] = prefix
+            segments[i + 1]["text"] = f"{dangler} {next_text}"
+    return segments
+
+
+def parse_human_transcript_to_srt_segments(
+        transcript_text: str, aligned_words: List[Dict]) -> List[Dict]:
+    """Map each transcript line onto its aligned word span."""
+    print("Parsing transcript into segments...")
+    segments: List[Dict] = []
+    lines = [ln.strip() for ln in transcript_text.split("\n") if ln.strip()]
+    cursor = 0
+    for line_idx, line in enumerate(lines):
+        if re.fullmatch(r"\s*\[.*?\]\s*", line):
+            continue
+        clean_line = re.sub(r"\[.*?\]", "", line).strip()
+        words = clean_line.split()
+        if not words:
+            continue
+        words_norm = [normalize_word(w) for w in words]
+        pos = -1
+        search_limit = min(cursor + 500,
+                           len(aligned_words) - len(words_norm) + 1)
+        for i in range(cursor, search_limit):
+            if all(i + j < len(aligned_words)
+                   and normalize_word(aligned_words[i + j]["word"]) == norm
+                   for j, norm in enumerate(words_norm)):
+                pos = i
+                break
+        if pos != -1:
+            first_word = aligned_words[pos]
+            last_word = aligned_words[pos + len(words) - 1]
+            start = first_word.get("start")
+            end = last_word.get("end")
+            cursor = pos + len(words)
+            if start is not None and end is not None:
+                segments.append({
+                    "index": line_idx + 1,
+                    "start": ms_to_time(int(start * 1000)),
+                    "end": ms_to_time(int(end * 1000)),
+                    "text": line,
+                })
+            else:
+                print(f"  [skip] line {line_idx + 1}: missing timestamps")
+        else:
+            print(f"  [skip] line {line_idx + 1}: no word match found")
+    print(f"[ok] Created {len(segments)} initial segments from transcript")
+    return segments
+
+
+def process_phase1(segments: List[Dict]) -> List[Dict]:
+    if not segments:
+        return []
+    merged: List[Dict] = []
+    i = 0
+    while i < len(segments):
+        if has_terminal_punctuation(segments[i]["text"]):
+            merged.append(segments[i])
+            i += 1
+            continue
+        group = [segments[i]]
+        parts = [segments[i]["text"]]
+        start = segments[i]["start"]
+        j = i + 1
+        boundary_found = False
+        while j < len(segments):
+            next_txt = segments[j]["text"]
+            prev_txt = segments[j - 1]["text"]
+            if next_txt and next_txt[0].isupper() and next_txt[0] != "I":
+                if not prev_txt.strip().endswith((",", ":", ";", "-", "—")):
+                    merged.extend(group)
+                    i = j
+                    boundary_found = True
+                    break
+            pot_text = " ".join(parts + [segments[j]["text"]])
+            if count_visible_characters(pot_text) >= _current_max_chars:
+                break
+            if not check_if_text_can_be_split_prettily(pot_text):
+                break
+            group.append(segments[j])
+            parts.append(segments[j]["text"])
+            if has_terminal_punctuation(segments[j]["text"]):
+                merged.append({"start": start, "end": segments[j]["end"],
+                               "text": " ".join(parts),
+                               "index": segments[i]["index"]})
+                i = j + 1
+                boundary_found = True
+                break
+            j += 1
+        if not boundary_found:
+            full_text = " ".join(parts)
+            if len(group) > 1 and is_eligible_sentence(
+                    full_text, start, segments[j - 1]["end"]):
+                merged.append({"start": start, "end": segments[j - 1]["end"],
+                               "text": full_text,
+                               "index": segments[i]["index"]})
+            else:
+                merged.extend(group)
+            i = j
+    return merged
+
+
+def process_phase2(segments: List[Dict]) -> List[Dict]:
+    if not segments:
+        return []
+    merged: List[Dict] = []
+    i = 0
+    while i < len(segments):
+        curr = segments[i]
+        if has_terminal_punctuation(curr["text"]):
+            merged.append(curr)
+            i += 1
+            continue
+        acc = curr
+        j = i + 1
+        while j < len(segments):
+            nxt = segments[j]
+            combined = acc["text"] + " " + nxt["text"]
+            if has_terminal_punctuation(acc["text"]):
+                break
+            if count_visible_characters(combined) >= _current_max_chars:
+                break
+            if not check_if_text_can_be_split_prettily(combined):
+                break
+            if (time_to_ms(nxt["end"]) - time_to_ms(acc["start"])) >= MAX_DURATION_MS:
+                break
+            acc = {"start": acc["start"], "end": nxt["end"],
+                   "text": combined, "index": acc["index"]}
+            if has_terminal_punctuation(acc["text"]):
+                j += 1
+                break
+            j += 1
+        merged.append(acc)
+        i = j
+    return merged
+
+
+def process_phase3(segments: List[Dict]) -> List[Dict]:
+    return [{"index": s.get("index", i + 1), "start": s["start"],
+             "end": s["end"], "text": balance_block_enhanced(s["text"])}
+            for i, s in enumerate(segments)]
+
+
+def run_iterative_merging(segments: List[Dict]) -> List[Dict]:
+    """Drive the phase sweep with the growing character budget."""
+    print("\n" + "=" * 60 + "\nAPPLYING ITERATIVE MERGING & BALANCING")
+    for i in range(ITERATION_START, ITERATION_END + 1):
+        set_max_chars(i)
+        if i % 10 == 0:
+            print(f"   ... iteration limit: {i}")
+        segments = process_phase1(segments)
+        segments = process_phase2(segments)
+        segments = shift_dangling_words(segments)
+        segments = process_phase3(segments)
+    print(f"[ok] Iterative processing complete: {len(segments)} final segments")
+    return segments
+
+
+def longest_line_length(content: str) -> int:
+    """Longest single display line of a (possibly two-line) subtitle block.
+
+    CPL is a *per-line* constraint. Measuring ``len(content)`` on a block
+    that phase 3 already balanced across two lines counts both lines plus
+    the newline, so every well-formed two-line cue looks like a violation.
+    """
+    return max((len(line) for line in content.splitlines()), default=0)
+
+
+def validate_srt_output(entries, name: str) -> Dict[str, int]:
+    print(f"\nValidating {name}...")
+    issues = {"overlaps": 0, "gaps_large": 0, "duration_long": 0, "cpl_high": 0}
+    # Pairwise checks: only defined for entries that have a successor.
+    for i in range(len(entries) - 1):
+        current = entries[i]
+        next_entry = entries[i + 1]
+        if current.end > next_entry.start:
+            issues["overlaps"] += 1
+        if (next_entry.start - current.end).total_seconds() > 5.0:
+            issues["gaps_large"] += 1
+    # Per-entry checks: must cover every entry, including the last one.
+    for entry in entries:
+        if (entry.end - entry.start).total_seconds() * 1000 > MAX_DURATION_MS:
+            issues["duration_long"] += 1
+        if longest_line_length(entry.content) > MAX_CPL:
+            issues["cpl_high"] += 1
+    print(f"  Issues found: {sum(issues.values())}")
+    for issue_type, count in issues.items():
+        if count > 0:
+            print(f"    - {issue_type}: {count}")
+    return issues
