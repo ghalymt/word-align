@@ -127,7 +127,7 @@ Outputs land next to the audio (or in `-o DIR`):
 | --------------------------- | ----------------------------------------------- |
 | `*_word_level.srt`          | one cue per word — the precision product        |
 | `*_sentence_level.srt`      | merged, balanced, CPL/duration-validated cues   |
-| `*_transcript.txt` / `.docx`| ensemble mode: consensus transcript document — paragraphed by speech pauses, `[HH:MM:SS]` stamps, and (docx) low-agreement words highlighted for review (`--doc txt|docx|both`) |
+| `*_transcript.txt` / `.docx`| ensemble mode: consensus transcript document — paragraphed by speech pauses, `[HH:MM:SS]` stamps, and (docx) low-agreement words highlighted for review. Select with `--doc`: `txt`, `docx`, or `both` |
 | `*_audio_tags.srt` (`--tags`) | experimental: `[laughs]`-style event track    |
 | `*_combined.srt` (`--tags`) | dialogue + events, collision-adjusted           |
 
