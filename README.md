@@ -162,11 +162,17 @@ are not covered.
 This is the logic that shipped tens of thousands of captioning jobs, and the
 test suite pins its behaviour.
 
-**Beta — works, not yet verified end-to-end on GPU:** transcript-free
-ensemble mode. The voting logic is tested; the engine *adapters* (WhisperX,
-NeMo Parakeet/Canary, Vosk, MFA) have not yet been run against real audio in
-their packaged form. Treat first runs as a shakedown, and please open an issue
-if an adapter misbehaves.
+**GPU-verified (reference mode):** the packaged reference-mode pipeline —
+Vosk → WhisperX/wav2vec2 → MFA gap-filling → interpolation → segmenter — has
+been run end-to-end on real audio on an RTX 4070 Ti, producing valid word- and
+sentence-level SRT (all lines within the CPL limit, timings monotonic). Run
+`python preflight.py` first; it reports exactly what's installed.
+
+**Beta — voting logic tested, NeMo voters not yet exercised on real audio:**
+transcript-free ensemble mode. The consensus algorithm is unit-tested, but the
+NeMo Parakeet/Canary adapters need a heavy optional install and have not been
+run against real audio in their packaged form. Treat first ensemble runs as a
+shakedown, and please open an issue if a voter misbehaves.
 
 **Experimental:** audio-event tagging (YAMNet), behind `--tags`.
 

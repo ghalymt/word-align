@@ -1,5 +1,6 @@
 """word-align: word-accurate subtitle timing via multi-engine alignment."""
-# 0.9.x until the engine adapters have been verified end-to-end against real
-# audio on GPU; the waterfall and segmenter logic itself is production-derived
-# and covered by the test suite. Bump to 1.0.0 after that verification run.
-__version__ = "0.9.0"
+# 0.9.1: reference-mode waterfall verified end-to-end on real audio (RTX
+# 4070 Ti) and the Windows multiprocessing entry-point guard fixed. Held
+# below 1.0.0 until the ensemble mode's NeMo voters are exercised on real
+# audio too.
+__version__ = "0.9.1"
