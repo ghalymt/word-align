@@ -33,6 +33,23 @@ MAX_WORKERS = 4             # process pool size for Vosk
 TERMINAL_PUNCT_PATTERN = re.compile(
     r"[.!?…。！？‥]+[\"'”’»）】]?$", re.UNICODE)
 
+# Abbreviations that end in a period but do NOT end a sentence. Without this,
+# the segmenter breaks "St. Michael's" and "Mr. Smith" at the abbreviation's
+# period (and again on the following capitalised name). Keys are compared
+# lowercased with trailing dots stripped, so "St." -> "st", "a.m." -> "a.m".
+# Deliberately excludes genuinely ambiguous ones ("no.", "etc.", "in.") that
+# frequently DO end a sentence.
+NON_TERMINAL_ABBREVIATIONS = {
+    # titles -- almost always precede a proper noun
+    "mr", "mrs", "ms", "messrs", "dr", "prof", "st", "mt", "sr", "jr",
+    "rev", "fr", "hon", "gen", "lt", "col", "sgt", "capt", "cmdr",
+    "sen", "rep", "gov", "supt", "det", "adm", "maj",
+    # measured / listed abbreviations that rarely end a sentence
+    "vs", "vol", "fig", "pp", "al",
+    # internal-period forms (kept as-is after stripping the trailing dot)
+    "u.s", "u.k", "a.m", "p.m", "e.g", "i.e",
+}
+
 # Words that read better at the start of a subtitle line than at the end.
 # Covers EN / FR / ES / DE / NL / IT / PT.
 PREFER_NEW_LINE_WORDS = {

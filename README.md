@@ -141,6 +141,13 @@ with a character budget growing 1→32, which lets small merges settle before
 large ones are considered — greedy single-pass merging produces measurably
 worse line breaks.
 
+Titles and common abbreviations (`Mr.`, `Mrs.`, `Dr.`, `St.`, `Prof.`, …) are
+not read as sentence ends, so `St. Michael's` is never split at the period. A
+final pass then removes any residual **overlap** between consecutive cues: it
+trims the less-reliable side and, guided by each cue boundary's source engine,
+never moves a Vosk-anchored timestamp (starts are preserved wherever possible,
+since they are the most accurate anchor in practice).
+
 ## Tests
 
 ```bash

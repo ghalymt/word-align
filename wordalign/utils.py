@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import re
 import subprocess
-from .config import TERMINAL_PUNCT_PATTERN
+from .config import NON_TERMINAL_ABBREVIATIONS, TERMINAL_PUNCT_PATTERN
+
+# Trailing closing quotes/brackets to peel off before inspecting the last word.
+_TRAILING_CLOSERS_RE = re.compile(r"[\"'”’»）】]+$")
 
 # NOTE: the tag-stripping regex is deliberately written once, here, and
 # imported everywhere. An earlier version of this pipeline lost the
@@ -36,11 +39,33 @@ def count_visible_characters(text: str) -> int:
     return len(text.replace("\n", "").replace("\r", ""))
 
 
+def ends_with_nonterminal_abbreviation(text: str) -> bool:
+    """True if *text*'s final token is an abbreviation like ``St.`` or ``Mr.``.
+
+    Used to stop the segmenter from treating an abbreviation's period as a
+    sentence boundary. Only the plain-period case matters -- ``?``/``!``/``…``
+    are unambiguous ends and are never abbreviations.
+    """
+    t = _TRAILING_CLOSERS_RE.sub("", text.strip())
+    if not t.endswith("."):
+        return False
+    tokens = t.split()
+    if not tokens:
+        return False
+    key = tokens[-1].lower().rstrip(".")
+    return key in NON_TERMINAL_ABBREVIATIONS
+
+
 def has_terminal_punctuation(text: str) -> bool:
     stripped = text.strip()
     if stripped.endswith("--"):
         return True
-    return bool(TERMINAL_PUNCT_PATTERN.search(stripped))
+    if not TERMINAL_PUNCT_PATTERN.search(stripped):
+        return False
+    # A trailing abbreviation ("...at St.") is not a sentence end.
+    if ends_with_nonterminal_abbreviation(stripped):
+        return False
+    return True
 
 
 def time_to_ms(time_str: str) -> int:

@@ -13,9 +13,12 @@ from wordalign.document import (group_into_paragraphs, group_into_sentences,
                                 write_txt)
 from wordalign.ensemble import build_consensus, consensus_to_text
 from wordalign.segment import (parse_human_transcript_to_srt_segments,
-                               run_iterative_merging, validate_srt_output)
-from wordalign.utils import (has_terminal_punctuation, normalize_word,
-                             strip_tags)
+                               process_phase1, resolve_overlaps,
+                               run_iterative_merging, set_max_chars,
+                               validate_srt_output)
+from wordalign.utils import (ends_with_nonterminal_abbreviation,
+                             has_terminal_punctuation, ms_to_time,
+                             normalize_word, strip_tags, time_to_ms)
 
 
 def W(word, t, conf=0.9, dur=0.28):
@@ -196,6 +199,64 @@ def test_terminal_punctuation_survives_closing_quotes():
     assert has_terminal_punctuation("Она сказала «Иди.»")
     assert has_terminal_punctuation("It ended.")
     assert not has_terminal_punctuation("and it trailed off")
+
+
+def test_abbreviations_are_not_sentence_ends():
+    """A trailing title/abbreviation must not read as a sentence boundary."""
+    for abbr in ("During my term at St.", "I spoke to Mr.", "Mrs.",
+                 "Dr.", "Prof.", "at 9 a.m.", "the U.S."):
+        assert not has_terminal_punctuation(abbr), abbr
+        assert ends_with_nonterminal_abbreviation(abbr), abbr
+    # Genuine sentence ends still register.
+    for real in ("It ended.", "Really?", "Stop!", "She said “Go.”",
+                 "at St. Michael's."):
+        assert has_terminal_punctuation(real), real
+
+
+def test_segmenter_does_not_split_on_abbreviation():
+    """Regression: "St. Michael's" was split at the abbreviation's period.
+
+    Both the terminal-punctuation check and the capitalised-next-word rule
+    used to fire on "St." + "Michael's". They must now merge instead.
+    """
+    set_max_chars(60)
+    segs = [
+        {"index": 1, "start": "00:00:00,000", "end": "00:00:01,000",
+         "start_source": "Vosk", "end_source": "Vosk",
+         "text": "During my term at St."},
+        {"index": 2, "start": "00:00:01,000", "end": "00:00:02,000",
+         "start_source": "Vosk", "end_source": "Vosk",
+         "text": "Michael's was quiet."},
+    ]
+    out = process_phase1([dict(s) for s in segs])
+    assert len(out) == 1, out
+    assert "St. Michael's" in out[0]["text"], out[0]["text"]
+
+
+def test_overlap_resolution_trims_end_and_preserves_start():
+    """Non-Vosk overlapping end is trimmed; the (Vosk) next start is kept."""
+    segs = [
+        {"start": "00:00:00,000", "end": "00:00:02,000",
+         "start_source": "Vosk", "end_source": "Interpolated", "text": "a"},
+        {"start": "00:00:01,500", "end": "00:00:03,000",
+         "start_source": "Vosk", "end_source": "Vosk", "text": "b"},
+    ]
+    out = resolve_overlaps(segs)
+    assert time_to_ms(out[0]["end"]) <= time_to_ms(out[1]["start"])
+    assert out[1]["start"] == "00:00:01,500"      # Vosk start untouched
+
+
+def test_overlap_resolution_never_moves_a_vosk_end():
+    """When the earlier end is Vosk, keep it and push the non-Vosk start."""
+    segs = [
+        {"start": "00:00:00,000", "end": "00:00:02,000",
+         "start_source": "Vosk", "end_source": "Vosk", "text": "a"},
+        {"start": "00:00:01,500", "end": "00:00:03,000",
+         "start_source": "WhisperX", "end_source": "Vosk", "text": "b"},
+    ]
+    out = resolve_overlaps(segs)
+    assert out[0]["end"] == "00:00:02,000"        # Vosk end untouched
+    assert time_to_ms(out[1]["start"]) >= time_to_ms(out[0]["end"])
 
 
 if __name__ == "__main__":

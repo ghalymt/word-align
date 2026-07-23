@@ -14,8 +14,10 @@ from typing import Dict, List, Optional
 
 from .config import (CLAUSE_MARKERS, ITERATION_END, ITERATION_START, MAX_CPL,
                      MAX_DURATION_MS, MIN_LINE_RATIO, PREFER_NEW_LINE_WORDS)
-from .utils import (count_visible_characters, has_terminal_punctuation,
-                    ms_to_time, normalize_word, time_to_ms)
+from .utils import (count_visible_characters,
+                    ends_with_nonterminal_abbreviation,
+                    has_terminal_punctuation, ms_to_time, normalize_word,
+                    time_to_ms)
 
 # The sweep's current character budget (module-level by design: the phase
 # functions consult it every call while cli drives it from 1 to MAX_CPL).
@@ -173,6 +175,11 @@ def parse_human_transcript_to_srt_segments(
                     "index": line_idx + 1,
                     "start": ms_to_time(int(start * 1000)),
                     "end": ms_to_time(int(end * 1000)),
+                    # Which engine produced the boundary timestamps -- carried
+                    # through the merge phases so overlap resolution can avoid
+                    # touching Vosk times (see resolve_overlaps).
+                    "start_source": first_word.get("source"),
+                    "end_source": last_word.get("source"),
                     "text": line,
                 })
             else:
@@ -202,7 +209,11 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
             next_txt = segments[j]["text"]
             prev_txt = segments[j - 1]["text"]
             if next_txt and next_txt[0].isupper() and next_txt[0] != "I":
-                if not prev_txt.strip().endswith((",", ":", ";", "-", "—")):
+                # A capitalised next word signals a new sentence -- unless the
+                # previous text merely trailed off on a comma/colon/dash, or
+                # ended on an abbreviation like "St." before a proper noun.
+                if (not prev_txt.strip().endswith((",", ":", ";", "-", "—"))
+                        and not ends_with_nonterminal_abbreviation(prev_txt)):
                     merged.extend(group)
                     i = j
                     boundary_found = True
@@ -216,6 +227,8 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
             parts.append(segments[j]["text"])
             if has_terminal_punctuation(segments[j]["text"]):
                 merged.append({"start": start, "end": segments[j]["end"],
+                               "start_source": segments[i].get("start_source"),
+                               "end_source": segments[j].get("end_source"),
                                "text": " ".join(parts),
                                "index": segments[i]["index"]})
                 i = j + 1
@@ -227,6 +240,8 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
             if len(group) > 1 and is_eligible_sentence(
                     full_text, start, segments[j - 1]["end"]):
                 merged.append({"start": start, "end": segments[j - 1]["end"],
+                               "start_source": segments[i].get("start_source"),
+                               "end_source": segments[j - 1].get("end_source"),
                                "text": full_text,
                                "index": segments[i]["index"]})
             else:
@@ -260,6 +275,8 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
             if (time_to_ms(nxt["end"]) - time_to_ms(acc["start"])) >= MAX_DURATION_MS:
                 break
             acc = {"start": acc["start"], "end": nxt["end"],
+                   "start_source": acc.get("start_source"),
+                   "end_source": nxt.get("end_source"),
                    "text": combined, "index": acc["index"]}
             if has_terminal_punctuation(acc["text"]):
                 j += 1
@@ -272,7 +289,9 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
 
 def process_phase3(segments: List[Dict]) -> List[Dict]:
     return [{"index": s.get("index", i + 1), "start": s["start"],
-             "end": s["end"], "text": balance_block_enhanced(s["text"])}
+             "end": s["end"], "text": balance_block_enhanced(s["text"]),
+             "start_source": s.get("start_source"),
+             "end_source": s.get("end_source")}
             for i, s in enumerate(segments)]
 
 
@@ -288,6 +307,64 @@ def run_iterative_merging(segments: List[Dict]) -> List[Dict]:
         segments = shift_dangling_words(segments)
         segments = process_phase3(segments)
     print(f"[ok] Iterative processing complete: {len(segments)} final segments")
+    return segments
+
+
+# Minimum gap (ms) left between two cues so they never share an exact boundary.
+OVERLAP_GAP_MS = 1
+
+
+def resolve_overlaps(segments: List[Dict]) -> List[Dict]:
+    """Remove overlaps between consecutive sentence cues.
+
+    Priority rules, tuned to how the engines actually behave:
+      1. Never move a Vosk timestamp -- Vosk is the timing authority (Whisper
+         is strong on words, weak on times).
+      2. Prefer preserving *start* times; they are empirically the most
+         accurate anchor. So resolve by trimming the earlier cue's END.
+      3. Only when the earlier END is Vosk (must be kept) and the later START
+         is not, push the later START forward instead.
+
+    When a boundary's source is unknown the code falls back to rule 2 (trim the
+    end, keep the start), which is already safe. The word-level SRT is never
+    touched -- this adjusts sentence-cue display times only.
+    """
+    fixed = 0
+    for i in range(len(segments) - 1):
+        cur, nxt = segments[i], segments[i + 1]
+        cur_start = time_to_ms(cur["start"])
+        cur_end = time_to_ms(cur["end"])
+        nxt_start = time_to_ms(nxt["start"])
+        nxt_end = time_to_ms(nxt["end"])
+        if cur_end <= nxt_start:
+            continue  # no overlap
+
+        end_is_vosk = cur.get("end_source") == "Vosk"
+        start_is_vosk = nxt.get("start_source") == "Vosk"
+
+        if not end_is_vosk:
+            # Trim the (less reliable) earlier end back behind the next start,
+            # keeping the cue non-degenerate.
+            new_end = max(cur_start + OVERLAP_GAP_MS, nxt_start - OVERLAP_GAP_MS)
+            if new_end < cur_end:
+                cur["end"] = ms_to_time(new_end)
+                fixed += 1
+        elif not start_is_vosk:
+            # Earlier end is Vosk -> keep it; nudge the later start to just
+            # after it, without crossing that cue's own end.
+            new_start = min(cur_end + OVERLAP_GAP_MS, nxt_end - OVERLAP_GAP_MS)
+            if new_start > nxt_start:
+                nxt["start"] = ms_to_time(new_start)
+                fixed += 1
+        else:
+            # Both boundaries are Vosk yet still overlap (an upstream artefact).
+            # Honour rule 2: preserve the start, clip the earlier end.
+            new_end = max(cur_start + OVERLAP_GAP_MS, nxt_start - OVERLAP_GAP_MS)
+            if new_end < cur_end:
+                cur["end"] = ms_to_time(new_end)
+                fixed += 1
+    if fixed:
+        print(f"[ok] Resolved {fixed} cue overlap(s)")
     return segments
 
 

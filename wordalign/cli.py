@@ -22,7 +22,8 @@ from .align import (interpolate_timestamps, make_surgical_mfa,
 from .config import PipelineConfig
 from .ensemble import build_consensus, consensus_to_text
 from .segment import (parse_human_transcript_to_srt_segments,
-                      run_iterative_merging, validate_srt_output)
+                      resolve_overlaps, run_iterative_merging,
+                      validate_srt_output)
 from .utils import (detect_language, extract_tags_from_transcript,
                     normalize_word, strip_tags, time_to_ms)
 
@@ -217,6 +218,7 @@ def main(argv=None) -> int:
     initial_segments = parse_human_transcript_to_srt_segments(
         original_text, aligned_words)
     segments = run_iterative_merging(initial_segments)
+    segments = resolve_overlaps(segments)
 
     # ------------------------------------------------------------- outputs
     base = cfg.resolve_output_base()
