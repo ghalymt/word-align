@@ -20,7 +20,8 @@ from . import __version__
 from .align import (interpolate_timestamps, make_surgical_mfa,
                     match_timestamps, print_alignment_statistics)
 from .config import PipelineConfig
-from .ensemble import build_consensus, consensus_to_text
+from .ensemble import (build_consensus, consensus_to_structured_text,
+                      consensus_to_text)
 from .segment import (parse_human_transcript_to_srt_segments,
                       resolve_overlaps, run_iterative_merging,
                       validate_srt_output)
@@ -54,9 +55,17 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--no-mfa", action="store_true")
     p.add_argument("--tags", action="store_true",
                    help="enable experimental audio-event tagging")
-    p.add_argument("--engines", default="whisperx,parakeet,vosk",
-                   help="comma list for ensemble mode "
-                        "(whisperx,parakeet,canary,vosk)")
+    p.add_argument("--engines", default="whisperx,qwen,vosk",
+                   help="comma list of ensemble voters "
+                        "(whisperx,qwen,vosk; legacy: parakeet,canary)")
+    p.add_argument("--qwen-python",
+                   help="python.exe of the venv holding qwen_asr "
+                        "(or set WORDALIGN_QWEN_PYTHON)")
+    p.add_argument("--qwen-models",
+                   help="HuggingFace cache dir with the Qwen models "
+                        "(or set WORDALIGN_QWEN_MODELS)")
+    p.add_argument("--qwen-chunk-seconds", type=float, default=60.0,
+                   help="Qwen audio chunk length; lower it if the GPU OOMs")
     p.add_argument("--whisper-model", default="large-v3")
     p.add_argument("--device", choices=["cuda", "cpu"],
                    help="force compute device (default: cuda when available)")
@@ -88,13 +97,20 @@ def _parse_args(argv=None) -> PipelineConfig:
         whisper_model=a.whisper_model,
         device=a.device,
         ensemble_engines=tuple(e.strip() for e in a.engines.split(",") if e.strip()),
+        qwen_python=a.qwen_python or os.environ.get("WORDALIGN_QWEN_PYTHON"),
+        qwen_models_dir=a.qwen_models or os.environ.get("WORDALIGN_QWEN_MODELS"),
+        qwen_chunk_seconds=a.qwen_chunk_seconds,
         doc_format=a.doc,
         doc_timestamps=not a.no_doc_timestamps,
     )
 
 
 def _run_ensemble(cfg: PipelineConfig, language: str):
-    """Return (consensus_words, transcript_text, whisperx_events)."""
+    """Return (consensus_words, transcript_text, whisperx_events, vosk_words).
+
+    ``vosk_words`` is handed back so the caller can re-time the consensus with
+    Vosk (the best timestamps) instead of the backbone's provisional times.
+    """
     from .engines.whisperx_engine import run_whisperx
     engine_words: Dict[str, List[Dict]] = {}
     wx_events: List[Dict] = []
@@ -104,6 +120,17 @@ def _run_ensemble(cfg: PipelineConfig, language: str):
                                            cfg.whisper_model, cfg.device)
         if wx_words:
             engine_words["whisperx"] = wx_words
+    if "qwen" in cfg.ensemble_engines:
+        from .engines.qwen_engine import run_qwen
+        qw = run_qwen(cfg.audio_path, language,
+                      qwen_python=cfg.qwen_python,
+                      models_dir=cfg.qwen_models_dir,
+                      chunk_seconds=cfg.qwen_chunk_seconds,
+                      asr_model=cfg.qwen_asr_model,
+                      aligner_model=cfg.qwen_aligner_model)
+        if qw:
+            engine_words["qwen"] = qw
+    # Legacy NVIDIA NeMo voters -- opt in with --engines parakeet/canary.
     if "parakeet" in cfg.ensemble_engines:
         from .engines.nemo_engine import run_parakeet
         pk = run_parakeet(cfg.audio_path, language)
@@ -125,7 +152,10 @@ def _run_ensemble(cfg: PipelineConfig, language: str):
             print("[info] Vosk voter skipped (library or model missing).")
 
     consensus = build_consensus(engine_words)
-    return consensus, consensus_to_text(consensus), wx_events
+    # Structured (newline-broken) text so the segmenter has real initial
+    # segments; the flat form would collapse the file into a single cue.
+    return (consensus, consensus_to_structured_text(consensus), wx_events,
+            engine_words.get("vosk", []))
 
 
 def main(argv=None) -> int:
@@ -137,6 +167,7 @@ def main(argv=None) -> int:
 
     # ---------------------------------------------------------------- input
     ensemble_conf = None
+    vosk_words_cache: List[Dict] = []
     if cfg.transcript_path:
         try:
             with open(cfg.transcript_path, "r", encoding="utf-8") as f:
@@ -152,7 +183,8 @@ def main(argv=None) -> int:
         if not cfg.language:
             print("[info] No --language given; assuming 'en' for ensemble "
                   "voter selection.")
-        consensus, original_text, wx_events_cache = _run_ensemble(cfg, language)
+        (consensus, original_text, wx_events_cache,
+         vosk_words_cache) = _run_ensemble(cfg, language)
         ensemble_conf = consensus
         wx_pending = False  # WhisperX already ran as the backbone
 
@@ -166,7 +198,13 @@ def main(argv=None) -> int:
     # ------------------------------------------------------------ waterfall
     wx_events: List[Dict] = []
     if ensemble_conf is not None:
-        # Consensus already carries backbone timestamps: seed them directly.
+        # Vosk carries the best timestamps, so seed it FIRST -- match_timestamps
+        # is fill-only, so Vosk wins wherever it matched a consensus word. The
+        # consensus (backbone times) then fills whatever Vosk missed, and MFA +
+        # interpolation clean up the remainder.
+        if vosk_words_cache:
+            match_timestamps(aligned_words, vosk_words_cache, "Vosk",
+                             human_words_norm)
         match_timestamps(aligned_words, ensemble_conf, "Ensemble",
                          human_words_norm)
         wx_events = wx_events_cache

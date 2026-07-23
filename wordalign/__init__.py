@@ -1,7 +1,9 @@
 """word-align: word-accurate subtitle timing via multi-engine alignment."""
-# 0.9.2: abbreviation-aware sentence splitting (St./Mr./Dr. no longer break a
-# cue at the period) and source-aware cue-overlap resolution that never moves
-# a Vosk timestamp. 0.9.1 fixed the Windows multiprocessing entry-point guard
-# and verified reference mode end-to-end on an RTX 4070 Ti. Held below 1.0.0
-# until the ensemble mode's NeMo voters are exercised on real audio too.
-__version__ = "0.9.2"
+# 0.10.0: Qwen3-ASR replaces NeMo as the default ensemble voter -- a *timed*
+# challenger (word timestamps via Qwen3-ForcedAligner) reached through a
+# subprocess bridge to its own venv. Ensemble mode is now verified end-to-end
+# on GPU: vote weight follows transcription accuracy (WhisperX > Qwen > Vosk),
+# Vosk seeds the timing, and the consensus is line-structured so segmentation
+# no longer collapses to a single cue. Builds on 0.9.x (Windows mp guard,
+# abbreviation-aware splitting, source-aware overlap resolution).
+__version__ = "0.10.0"

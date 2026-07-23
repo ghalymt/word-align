@@ -8,7 +8,9 @@ langdetect>=1.0.9
 
 # Optional engines (install what you need)
 # vosk>=0.3.45              # lightweight CPU engine / ensemble voter
-# nemo_toolkit[asr]>=2.0    # NVIDIA Parakeet / Canary-Qwen ensemble voters
+# qwen-asr                  # Qwen3-ASR + ForcedAligner ensemble voter (often
+#                           #   in its own venv; see WORDALIGN_QWEN_PYTHON)
+# nemo_toolkit[asr]>=2.0    # legacy NVIDIA Parakeet / Canary-Qwen voters
 # tensorflow>=2.15          # YAMNet audio-event tagging (experimental)
 # tensorflow-hub>=0.16      # YAMNet audio-event tagging (experimental)
 # textgrid>=1.5             # parsing MFA output (needed for MFA gap-filling)

@@ -42,29 +42,33 @@ gap slices instead of whole files. Every word in the output is traceable to
 its source engine — the per-engine breakdown is printed at the end of every
 run.
 
-## Transcript-free ensemble mode (beta)
+## Transcript-free ensemble mode
 
 Given audio with no reference transcript, `word-align` builds one by **making
-the engines vote**. The 2026 Hugging Face Open ASR Leaderboard's conclusion
-after evaluating 60+ systems is that there is no catch-all model: LLM-decoder
-models (NVIDIA Canary-Qwen) lead English accuracy, Whisper large-v3 leads
-language coverage (99 languages), and Parakeet TDT leads speed and silence
-robustness. So instead of picking one, `wordalign.ensemble` implements a
-time-anchored, confidence-weighted voting scheme (a lightweight descendant of
-ROVER, Fiscus 1997):
+the engines vote** — a time-anchored, confidence-weighted scheme (a lightweight
+descendant of ROVER, Fiscus 1997), because no single model wins on every axis:
 
-- **WhisperX** is the backbone: best multilingual coverage *and* the word
-  timestamps everything downstream needs.
-- **Parakeet TDT** and **Canary-Qwen** (optional, via NeMo) act as
-  high-accuracy challengers; a backbone word is replaced only when the
-  weighted vote against it clears a margin.
-- **Vosk** contributes an architecturally independent opinion for cheap.
+- **WhisperX** (Whisper large-v3 + wav2vec2) is the backbone: strongest
+  transcription and 99-language coverage, so it anchors both the word sequence
+  and the top vote weight.
+- **Qwen3-ASR** (+ Qwen3-ForcedAligner) is a **timed** challenger: a close
+  second on transcription with real word timestamps, so it can *overturn* a
+  backbone error, not merely reinforce it. It runs in its own virtualenv via a
+  small subprocess bridge (see Install), so its dependencies never collide with
+  the WhisperX stack.
+- **Vosk** is an architecturally independent voter — weakest on words but the
+  most accurate on **timestamps**, which is why it seeds the final timing.
 - Every consensus word keeps a fused agreement score, and low-agreement words
   are flagged for human review — because in professional captioning, knowing
   *where the transcript is uncertain* is as valuable as the transcript itself.
 
-The consensus is then fed through the exact same alignment waterfall as a
-human transcript, so both modes share one battle-tested code path.
+Vote weight follows *transcription* accuracy (WhisperX > Qwen > Vosk); final
+**timing** is drawn from the waterfall, where Vosk leads. The consensus is fed
+through the same alignment path as a human transcript, so both modes share one
+battle-tested segmenter.
+
+NVIDIA NeMo's Parakeet/Canary remain available as legacy voters
+(`--engines parakeet,canary`) for anyone who has them installed.
 
 ## Install
 
@@ -73,9 +77,9 @@ git clone https://github.com/ghalymt/word-align
 cd word-align
 pip install -r requirements.txt          # core (WhisperX path)
 pip install vosk                         # optional: waterfall stage 1 / voter
-pip install "nemo_toolkit[asr]"          # optional: Parakeet & Canary voters
 pip install tensorflow tensorflow-hub    # optional: experimental tagging
 pip install textgrid                     # optional: MFA gap-filling
+pip install "nemo_toolkit[asr]"          # optional: legacy Parakeet/Canary voters
 ```
 
 `ffmpeg`/`ffprobe` must be on PATH. For the MFA stage, install
@@ -83,6 +87,20 @@ pip install textgrid                     # optional: MFA gap-filling
 either put `mfa` on PATH or point `WORDALIGN_MFA` at the executable or its
 conda env. Vosk models go in any directory, referenced via `--vosk-models` or
 `WORDALIGN_VOSK_MODELS`.
+
+**Qwen voter (ensemble mode).** Qwen3-ASR ships its own torch, which usually
+differs from the WhisperX stack's, so word-align calls it out-of-process. Point
+it at the virtualenv that has [`qwen-asr`](https://pypi.org/project/qwen-asr/)
+installed and (for offline use) the local HuggingFace model cache:
+
+```bash
+export WORDALIGN_QWEN_PYTHON=/path/to/qwen-venv/bin/python   # Windows: ...\Scripts\python.exe
+export WORDALIGN_QWEN_MODELS=/path/to/qwen/models            # holds Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B
+```
+
+If `qwen_asr` is importable in word-align's own environment, no bridge is
+needed — it runs in-process. `--qwen-python` / `--qwen-models` override the
+environment variables, and `--qwen-chunk-seconds` bounds VRAM on long files.
 
 Because most of those pieces are optional and several are heavy, there is a
 preflight check that tells you exactly what is present, what is missing, and
@@ -103,7 +121,7 @@ blocks a run — optional gaps are listed but never fail the check.
 python -m wordalign interview.mp4 -t interview.txt --vosk-models ~/vosk-models
 
 # Ensemble mode: audio only, engines vote on the transcript
-python -m wordalign interview.mp4 --engines whisperx,parakeet,vosk -l en
+python -m wordalign interview.mp4 --engines whisperx,qwen,vosk -l en
 
 # Ensemble mode with a Word transcript deliverable
 python -m wordalign interview.mp4 -l en --doc docx
@@ -154,14 +172,15 @@ since they are the most accurate anchor in practice).
 python tests/test_pipeline.py     # or: python -m pytest tests/ -q
 ```
 
-12 tests, no GPU / audio / model weights required. They cover ensemble voting
+18 tests, no GPU / audio / model weights required. They cover ensemble voting
 behaviour (challenger correction, the replacement margin, backbone selection,
 the reinforce-only role of untimed engines), the fill-only semantics of the
-waterfall, interpolation monotonicity, CPL enforcement in the segmenter and
-in the output validator, tag stripping, terminal-punctuation detection, and
-transcript paragraphing. Several are regression tests pinned to specific bugs
-— each names the bug it guards against. Engine adapters need real audio and
-are not covered.
+waterfall, interpolation monotonicity, CPL enforcement in the segmenter and in
+the output validator, abbreviation-aware splitting, source-aware overlap
+resolution, consensus line-structuring, the Qwen worker's output parsing, tag
+stripping, terminal-punctuation detection, and transcript paragraphing. Several
+are regression tests pinned to specific bugs — each names the bug it guards
+against. Engine adapters need real audio and are not covered.
 
 ## Status
 
@@ -175,16 +194,18 @@ been run end-to-end on real audio on an RTX 4070 Ti, producing valid word- and
 sentence-level SRT (all lines within the CPL limit, timings monotonic). Run
 `python preflight.py` first; it reports exactly what's installed.
 
-**Beta — voting logic tested, NeMo voters not yet exercised on real audio:**
-transcript-free ensemble mode. The consensus algorithm is unit-tested, but the
-NeMo Parakeet/Canary adapters need a heavy optional install and have not been
-run against real audio in their packaged form. Treat first ensemble runs as a
-shakedown, and please open an issue if a voter misbehaves.
+**GPU-verified (ensemble mode):** WhisperX + Qwen3-ASR + Vosk voting, with the
+Qwen voter reached through the subprocess bridge, has been run end-to-end on
+real audio — three engines vote, Vosk seeds the timing, and the segmenter emits
+clean multi-cue SRT plus a flagged transcript. Ensemble mode is newer than the
+reference path and its transcription quality is only ever as good as the voters,
+so low-agreement words are surfaced rather than hidden.
 
 **Experimental:** audio-event tagging (YAMNet), behind `--tags`.
 
-Ensemble voter weights are leaderboard-informed defaults; tune
-`wordalign/ensemble.py::DEFAULT_PRIORS` for your domain.
+Ensemble vote weights reflect transcription accuracy on the author's material
+(WhisperX > Qwen > Vosk); tune `wordalign/ensemble.py::DEFAULT_PRIORS` for your
+own domain.
 
 ## Known limitations
 

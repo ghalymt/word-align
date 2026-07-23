@@ -259,6 +259,49 @@ def test_overlap_resolution_never_moves_a_vosk_end():
     assert time_to_ms(out[1]["start"]) >= time_to_ms(out[0]["end"])
 
 
+def test_consensus_structured_text_breaks_into_lines():
+    """Regression: ensemble mode collapsed to one cue because the consensus was
+    a single unbroken line. It must break at sentence ends and pauses."""
+    from wordalign.ensemble import consensus_to_structured_text
+
+    def C(word, t, dur=0.3):
+        return {"word": word, "start": t, "end": t + dur}
+
+    consensus = [C("Hello", 0.0), C("there.", 0.4),        # sentence end
+                 C("A", 5.0), C("long", 5.3), C("pause", 5.6)]  # 4.6s gap
+    text = consensus_to_structured_text(consensus, max_chars=42, max_gap=0.6)
+    lines = text.split("\n")
+    assert lines[0] == "Hello there.", lines
+    assert "A long pause" in text
+    assert len(lines) >= 2 and all(len(ln) <= 60 for ln in lines), lines
+
+
+def test_qwen_worker_output_parsing():
+    """The Qwen adapter must find its JSON amid stdout noise and drop untimed
+    or empty words, filling a default confidence."""
+    import json as _json
+    from wordalign.engines.qwen_engine import (SENTINEL, _parse_worker_output,
+                                               _words_from_payload)
+    payload = {"language": "en", "words": [
+        {"word": "Hello", "start": 0.0, "end": 0.4, "conf": 0.88},
+        {"word": "world", "start": 0.4, "end": 0.8},        # conf defaulted
+        {"word": "  ", "start": 0.8, "end": 1.0},            # empty -> dropped
+        {"word": "late", "start": None, "end": None},        # untimed -> dropped
+    ]}
+    stdout = ("loading model...\nlibrary chatter\n"
+              + SENTINEL + _json.dumps(payload) + "\ntrailing line\n")
+    parsed = _parse_worker_output(stdout)
+    assert parsed["language"] == "en"
+    words = _words_from_payload(parsed)
+    assert [w["word"] for w in words] == ["Hello", "world"]
+    assert words[1]["conf"] == 0.9
+    try:
+        _parse_worker_output("no sentinel here")
+        assert False, "expected ValueError when no payload present"
+    except ValueError:
+        pass
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

@@ -198,10 +198,18 @@ class PipelineConfig:
     use_tags: bool = False                     # experimental; off by default
     yamnet_confidence: float = 0.9
     whisper_model: str = "large-v3"
-    ensemble_engines: tuple = ("whisperx", "parakeet", "vosk")
+    ensemble_engines: tuple = ("whisperx", "qwen", "vosk")
     device: Optional[str] = None               # None -> cuda if available
     doc_format: str = "txt"                    # ensemble transcript: none/txt/docx/both
     doc_timestamps: bool = True                # [HH:MM:SS] paragraph prefixes
+    # Qwen3-ASR voter (runs out-of-process in its own venv; see qwen_engine).
+    qwen_python: Optional[str] = field(
+        default_factory=lambda: os.environ.get("WORDALIGN_QWEN_PYTHON"))
+    qwen_models_dir: Optional[str] = field(
+        default_factory=lambda: os.environ.get("WORDALIGN_QWEN_MODELS"))
+    qwen_chunk_seconds: float = 60.0
+    qwen_asr_model: str = "Qwen/Qwen3-ASR-1.7B"
+    qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
 
     def vosk_model_path(self, language: str) -> Optional[str]:
         if not self.vosk_models_dir:

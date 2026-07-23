@@ -2,13 +2,19 @@
 
 Rationale
 ---------
-The Hugging Face Open ASR Leaderboard's own conclusion after evaluating
-60+ systems is that "there is no catch-all model": LLM-decoder models
-(Canary-Qwen) win English accuracy, Whisper large-v3 wins language
-coverage, TDT models (Parakeet) win speed and silence robustness, and
-Vosk provides an architecturally independent opinion. word-align
-therefore treats transcription as a *voting problem* -- a lightweight,
-time-anchored variant of the classic ROVER technique (Fiscus, 1997).
+No single model wins on every axis, so word-align treats transcription as
+a *voting problem* -- a lightweight, time-anchored variant of the classic
+ROVER technique (Fiscus, 1997). The default lineup:
+
+  * WhisperX (Whisper large-v3 + wav2vec2) -- strongest transcription here
+    and 99-language coverage, so it is the backbone and top-weighted voter.
+  * Qwen3-ASR (+ Qwen3-ForcedAligner) -- a close second on transcription and,
+    crucially, a *timed* voter: real word timestamps let it overturn a
+    backbone error, not merely reinforce it.
+  * Vosk -- an architecturally independent voter; weakest on words but the
+    most accurate on timestamps (which is why the waterfall leans on it).
+
+(NVIDIA NeMo's Parakeet/Canary remain available as legacy voters.)
 
 Method
 ------
@@ -40,12 +46,18 @@ from typing import Dict, List, Optional
 
 from .utils import normalize_word
 
-# Engine priors, informed by 2026 Open ASR Leaderboard standings.
+# Vote-weight priors reflect *transcription* accuracy (voting is about which
+# WORD is right), not timestamp quality. Field-tuned ranking on this setup:
+# WhisperX > Qwen > Vosk for words. WhisperX is therefore both the backbone and
+# the highest-weighted voter; a challenger only overturns it when others agree
+# (Qwen + Vosk = 0.85 + 0.55 clears the backbone's 1.00 + margin). Timestamp
+# quality is handled separately in the waterfall, where Vosk leads (see cli).
 DEFAULT_PRIORS = {
-    "canary": 1.20,     # top English WER (LLM decoder)
-    "parakeet": 1.10,   # beats Whisper on English; silence-robust
-    "whisperx": 1.00,   # multilingual backbone + best word timing
-    "vosk": 0.55,       # lightweight independent voter
+    "whisperx": 1.00,   # best transcription here -> backbone + top vote weight
+    "qwen": 0.85,       # strong transcription, just behind WhisperX; word-timed
+    "vosk": 0.55,       # weakest transcription, but the best timestamps
+    "canary": 1.20,     # legacy (NeMo), text-only; opt in via --engines
+    "parakeet": 1.10,   # legacy (NeMo); opt in via --engines
 }
 
 # Backbone selection is deliberately SEPARATE from vote weight. The
@@ -53,7 +65,7 @@ DEFAULT_PRIORS = {
 # on, so it is chosen for timestamp quality and language coverage --
 # not for raw WER. WhisperX wins that job even though Canary/Parakeet
 # carry more voting weight on lexical accuracy.
-BACKBONE_PREFERENCE = ("whisperx", "parakeet", "vosk")
+BACKBONE_PREFERENCE = ("whisperx", "qwen", "vosk")
 
 REPLACE_MARGIN = 0.25   # challenger must beat backbone vote by this margin
 OVERLAP_WINDOW = 0.40   # seconds of midpoint tolerance for time clustering
@@ -199,3 +211,46 @@ def build_consensus(engine_words: Dict[str, List[Dict]],
 def consensus_to_text(consensus: List[Dict]) -> str:
     """Render the consensus word list as a plain transcript."""
     return " ".join(w["word"] for w in consensus)
+
+
+def consensus_to_structured_text(consensus: List[Dict],
+                                 max_chars: int = 42,
+                                 max_gap: float = 0.6) -> str:
+    """Render the consensus as newline-separated, roughly subtitle-sized lines.
+
+    A human transcript arrives pre-broken into caption lines, which is what the
+    segmenter merges and balances. The raw consensus is one unbroken word
+    stream, so feeding it in directly collapses the whole file into a single
+    cue. Here we insert line breaks at sentence ends, at speech pauses, and
+    before a line would grow too long -- giving the segmenter the same kind of
+    short initial segments it gets in reference mode.
+    """
+    from .utils import has_terminal_punctuation
+
+    lines: List[str] = []
+    cur: List[str] = []
+    cur_chars = 0
+    prev_end: Optional[float] = None
+
+    def flush():
+        nonlocal cur, cur_chars
+        if cur:
+            lines.append(" ".join(cur))
+            cur, cur_chars = [], 0
+
+    for w in consensus:
+        word = str(w["word"])
+        start = w.get("start")
+        gap = (start - prev_end
+               if start is not None and prev_end is not None else 0.0)
+        # Break before this word on a pause or if the line would get unwieldy.
+        if cur and (gap > max_gap or cur_chars + 1 + len(word) > max_chars):
+            flush()
+        cur.append(word)
+        cur_chars += len(word) + (1 if cur_chars else 0)
+        if has_terminal_punctuation(word):   # break after a sentence end
+            flush()
+        if w.get("end") is not None:
+            prev_end = w["end"]
+    flush()
+    return "\n".join(lines)
