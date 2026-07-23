@@ -1,8 +1,8 @@
 """word-align: word-accurate subtitle timing via multi-engine alignment."""
-# 0.11.0: configurable subtitle layout -- per-line CPL x line count (42x2 for
-# regular video, 32x2 for vertical), max duration, min cue duration -- plus a
-# "no-panic" balancer that never forces an ugly break, isolated-tag protection,
-# overlap resolution iterated to zero, and a minimum-duration guard that clears
-# sub-frame cues. 0.10.0 added the Qwen3-ASR timed ensemble voter; 0.9.x fixed
-# the Windows mp guard, abbreviation splitting, and source-aware overlaps.
-__version__ = "0.11.0"
+# 1.0.0: both modes verified end-to-end on GPU and the subtitle layout follows
+# the .srt standard (configurable 42x2 / 32x2). Reference mode (Vosk -> WhisperX
+# -> MFA -> interpolation -> segmenter) is production-derived and GPU-verified;
+# ensemble mode fuses WhisperX + Qwen3-ASR + Vosk with a no-panic balancer,
+# isolated-tag protection, zero-overlap timing, and a minimum-duration guard.
+# 23 tests. See the git history for the 0.9.x -> 1.0.0 path.
+__version__ = "1.0.0"
