@@ -151,20 +151,34 @@ Outputs land next to the audio (or in `-o DIR`):
 
 ## Segmentation rules
 
-The segmenter enforces professional captioning constraints: 32 characters per
-line, 3-second maximum block duration, balanced line splits that respect
-protected phrases and prefer breaking **before** function words, with
-language-aware clause markers for EN/FR/ES/DE/NL/IT/PT. The merge sweep runs
-with a character budget growing 1→32, which lets small merges settle before
-large ones are considered — greedy single-pass merging produces measurably
-worse line breaks.
+The segmenter enforces professional captioning constraints, and the layout is
+**configurable** to the `.srt` standard for the target format:
 
-Titles and common abbreviations (`Mr.`, `Mrs.`, `Dr.`, `St.`, `Prof.`, …) are
-not read as sentence ends, so `St. Michael's` is never split at the period. A
-final pass then removes any residual **overlap** between consecutive cues: it
-trims the less-reliable side and, guided by each cue boundary's source engine,
-never moves a Vosk-anchored timestamp (starts are preserved wherever possible,
-since they are the most accurate anchor in practice).
+| flag | default | meaning |
+| --- | --- | --- |
+| `--max-cpl` | `42` | characters per line — **42** for regular video, **32** for vertical/social |
+| `--max-lines` | `2` | lines per cue |
+| `--max-duration-ms` | `7000` | maximum on-screen time per cue |
+| `--min-cue-ms` | `700` | minimum on-screen time per cue |
+
+The merge sweep grows its character budget from 1 up to `max-cpl × max-lines`
+(so a cue fills up to two lines), which lets small merges settle before large
+ones — greedy single-pass merging produces measurably worse breaks. Line
+balancing respects protected phrases, prefers breaking **before** function
+words, and uses language-aware clause markers for EN/FR/ES/DE/NL/IT/PT.
+
+Three principles keep the output review-ready:
+
+- **No forced bad breaks.** Balancing tries a gold-standard split, then a
+  relaxed one; if neither is clean it leaves the line long and *visible* for a
+  human, rather than hiding an ugly mid-phrase break.
+- **Abbreviations and tags stay whole.** `Mr.`, `Mrs.`, `Dr.`, `St.`, `Prof.` …
+  are not read as sentence ends, so `St. Michael's` is never split at the
+  period; and a pure `[music]`-style tag is never merged into dialogue.
+- **Clean timing.** Overlaps between cues are resolved to zero (trimming the
+  less-reliable side, never moving a Vosk-anchored timestamp, preserving starts
+  where possible); any sub-frame cue is extended into free space or merged into
+  its neighbour, so no subtitle flashes for a millisecond.
 
 ## Tests
 
@@ -172,15 +186,16 @@ since they are the most accurate anchor in practice).
 python tests/test_pipeline.py     # or: python -m pytest tests/ -q
 ```
 
-18 tests, no GPU / audio / model weights required. They cover ensemble voting
-behaviour (challenger correction, the replacement margin, backbone selection,
-the reinforce-only role of untimed engines), the fill-only semantics of the
-waterfall, interpolation monotonicity, CPL enforcement in the segmenter and in
-the output validator, abbreviation-aware splitting, source-aware overlap
-resolution, consensus line-structuring, the Qwen worker's output parsing, tag
-stripping, terminal-punctuation detection, and transcript paragraphing. Several
-are regression tests pinned to specific bugs — each names the bug it guards
-against. Engine adapters need real audio and are not covered.
+23 tests, no GPU / audio / model weights required. They cover ensemble voting
+(challenger correction, the replacement margin, backbone selection, the
+reinforce-only role of untimed engines), the fill-only waterfall, interpolation
+monotonicity, configurable CPL, the no-panic balancer, isolated-tag protection,
+abbreviation-aware splitting, source-aware overlap resolution iterated to zero,
+the minimum-duration guard, consensus line-structuring, the Qwen worker's output
+parsing, CPL enforcement in the validator, tag stripping, terminal-punctuation
+detection, and transcript paragraphing. Several are regression tests pinned to
+specific bugs — each names the bug it guards against. Engine adapters need real
+audio and are not covered.
 
 ## Status
 

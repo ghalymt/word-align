@@ -202,6 +202,12 @@ class PipelineConfig:
     device: Optional[str] = None               # None -> cuda if available
     doc_format: str = "txt"                    # ensemble transcript: none/txt/docx/both
     doc_timestamps: bool = True                # [HH:MM:SS] paragraph prefixes
+    # Subtitle layout (per-line CPL x line count). 42x2 suits regular video,
+    # 32x2 suits vertical/social. max_duration_ms caps a cue's on-screen time.
+    max_cpl: int = 42
+    max_lines: int = 2
+    max_duration_ms: int = 7000
+    min_cue_ms: int = 700                      # minimum on-screen time per cue
     # Qwen3-ASR voter (runs out-of-process in its own venv; see qwen_engine).
     qwen_python: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_QWEN_PYTHON"))

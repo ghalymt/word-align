@@ -1,8 +1,8 @@
 """Sentence segmentation: transcript lines -> broadcast-quality subtitle blocks.
 
 Three phases run inside an iterative sweep with a growing character budget
-(1..MAX_CPL), which lets small merges happen early and prevents greedy
-over-merging:
+(1 up to lines x per-line CPL), which lets small merges happen early and
+prevents greedy over-merging:
     phase 1  merge lines up to sentence boundaries (capitalization-aware)
     phase 2  merge short fragments under CPL/duration limits
     phase 3  balance each block into visually even lines
@@ -12,21 +12,65 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from .config import (CLAUSE_MARKERS, ITERATION_END, ITERATION_START, MAX_CPL,
+from .config import (CLAUSE_MARKERS, ITERATION_START, MAX_CPL,
                      MAX_DURATION_MS, MIN_LINE_RATIO, PREFER_NEW_LINE_WORDS)
 from .utils import (count_visible_characters,
                     ends_with_nonterminal_abbreviation,
                     has_terminal_punctuation, ms_to_time, normalize_word,
                     time_to_ms)
 
+# ---------------------------------------------------------------------------
+# Runtime layout configuration (set once by the CLI before segmenting).
+#
+# The subtitle standard is expressed as two knobs -- characters *per line* and
+# number of *lines*. A cue may hold up to `_max_lines` lines of `_max_cpl`
+# characters, so the merge sweep grows its budget to `_max_cpl * _max_lines`
+# (e.g. 42x2 = 84 for regular video, 32x2 = 64 for vertical/social) while each
+# individual line is still capped at `_max_cpl`.
+# ---------------------------------------------------------------------------
+_max_cpl = MAX_CPL                    # characters per line
+_max_lines = 2                        # lines per cue
+_max_duration_ms = MAX_DURATION_MS    # max on-screen duration per cue
+
+# Second-attempt ratio for the balancer: prefer a slightly uneven split over
+# leaving a line too long, but never force an outright ugly break.
+RELAXED_LINE_RATIO = 0.20
+
+
+def set_layout(max_cpl: Optional[int] = None, max_lines: Optional[int] = None,
+               max_duration_ms: Optional[int] = None) -> None:
+    """Configure the per-line / per-cue limits used throughout segmentation."""
+    global _max_cpl, _max_lines, _max_duration_ms
+    if max_cpl is not None:
+        _max_cpl = int(max_cpl)
+    if max_lines is not None:
+        _max_lines = int(max_lines)
+    if max_duration_ms is not None:
+        _max_duration_ms = int(max_duration_ms)
+
+
+def _cue_char_budget() -> int:
+    """Total characters a cue may hold: per-line limit times line count."""
+    return _max_cpl * _max_lines
+
+
 # The sweep's current character budget (module-level by design: the phase
-# functions consult it every call while cli drives it from 1 to MAX_CPL).
-_current_max_chars = MAX_CPL
+# functions consult it every call while the sweep drives it from 1 upward).
+_current_max_chars = _max_cpl
 
 
 def set_max_chars(value: int) -> None:
     global _current_max_chars
     _current_max_chars = value
+
+
+_ISOLATED_TAG_RE = re.compile(r"^\s*\[[^\]]+\]\s*$")
+
+
+def is_isolated_tag(text: str) -> bool:
+    """A cue that is nothing but a single ``[bracketed]`` tag (``[music]``,
+    ``[laughter]`` …) should stay on its own line, never merged into dialogue."""
+    return bool(_ISOLATED_TAG_RE.match(text or ""))
 
 
 def is_protected_phrase(text: str, split_pos: int) -> bool:
@@ -44,14 +88,15 @@ def is_protected_phrase(text: str, split_pos: int) -> bool:
     return False
 
 
-def evaluate_split(text: str, pos: int, total_len: int) -> Optional[dict]:
+def evaluate_split(text: str, pos: int, total_len: int,
+                   min_ratio: float = MIN_LINE_RATIO) -> Optional[dict]:
     if is_protected_phrase(text, pos):
         return None
     line1 = text[:pos].strip()
     line2 = text[pos:].strip()
     l1 = count_visible_characters(line1)
     l2 = count_visible_characters(line2)
-    if l1 > MAX_CPL or l2 > MAX_CPL:
+    if l1 > _max_cpl or l2 > _max_cpl:
         return None
     if l2 < 2:
         return None
@@ -59,7 +104,7 @@ def evaluate_split(text: str, pos: int, total_len: int) -> Optional[dict]:
         return None
     if line1 and line1[-1] in "([{«":
         return None
-    if l1 < (total_len * MIN_LINE_RATIO) or l2 < (total_len * MIN_LINE_RATIO):
+    if l1 < (total_len * min_ratio) or l2 < (total_len * min_ratio):
         return None
     balance_penalty = abs(l1 - l2)
     w2 = line2.split()[0].lower().rstrip(",.;") if line2 else ""
@@ -77,9 +122,9 @@ def evaluate_split(text: str, pos: int, total_len: int) -> Optional[dict]:
 def check_if_text_can_be_split_prettily(text: str) -> bool:
     text = text.replace("\n", " ").strip()
     total_len = count_visible_characters(text)
-    if total_len <= MAX_CPL:
+    if total_len <= _max_cpl:
         return True
-    if total_len > (MAX_CPL * 2):
+    if total_len > _cue_char_budget():
         return False
     for i in range(1, len(text)):
         if text[i] == " " and evaluate_split(text, i, total_len) is not None:
@@ -97,20 +142,46 @@ def find_word_boundary_near_limit(text: str, max_pos: int) -> int:
 
 
 def balance_block_enhanced(text: str) -> str:
-    text = text.replace("\n", " ").strip()
-    if len(text) <= MAX_CPL:
-        return text
-    candidates = []
-    for i in range(1, len(text)):
-        if text[i] == " ":
-            c = evaluate_split(text, i, len(text))
-            if c:
-                candidates.append(c)
-    if candidates:
-        best = min(candidates, key=lambda x: x["score"])
-        return f"{best['l1']}\n{best['l2']}"
-    best_break = find_word_boundary_near_limit(text, MAX_CPL)
-    return f"{text[:best_break].strip()}\n{text[best_break:].strip()}"
+    """Balance a cue into two lines -- but never introduce a bad break.
+
+    Strategy (ported from the manual-review-friendly balancer): keep it one
+    line if it fits; keep an already-valid two-line split untouched; otherwise
+    try a balanced (gold) split, then a relaxed (silver) one. If no clean split
+    exists, leave the text as a single long line so the validator flags it for
+    a human, rather than forcing an ugly mid-phrase break.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ""
+
+    # An existing, already-valid two-line split is left exactly as it is.
+    if "\n" in stripped:
+        lines = stripped.split("\n")
+        if len(lines) == 2:
+            l1 = count_visible_characters(lines[0])
+            l2 = count_visible_characters(lines[1])
+            ratio = l1 / (l1 + l2) if (l1 + l2) else 0
+            if (l1 <= _max_cpl and l2 <= _max_cpl
+                    and MIN_LINE_RATIO <= ratio <= 1 - MIN_LINE_RATIO):
+                return stripped
+
+    flat = " ".join(stripped.replace("\n", " ").split())
+    total = count_visible_characters(flat)
+    if total <= _max_cpl:
+        return flat
+
+    for ratio in (MIN_LINE_RATIO, RELAXED_LINE_RATIO):
+        candidates = []
+        for i in range(1, len(flat)):
+            if flat[i] == " ":
+                c = evaluate_split(flat, i, total, ratio)
+                if c:
+                    candidates.append(c)
+        if candidates:
+            best = min(candidates, key=lambda x: x["score"])
+            return f"{best['l1']}\n{best['l2']}"
+
+    return flat   # no clean split -> leave long, visible for manual review
 
 
 def is_eligible_sentence(sentence_text: str, start_time: str,
@@ -120,7 +191,7 @@ def is_eligible_sentence(sentence_text: str, start_time: str,
     if not check_if_text_can_be_split_prettily(sentence_text):
         return False
     duration_ms = time_to_ms(end_time) - time_to_ms(start_time)
-    if duration_ms >= MAX_DURATION_MS:
+    if duration_ms >= _max_duration_ms:
         return False
     return True
 
@@ -196,6 +267,10 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
     merged: List[Dict] = []
     i = 0
     while i < len(segments):
+        if is_isolated_tag(segments[i]["text"]):
+            merged.append(segments[i])
+            i += 1
+            continue
         if has_terminal_punctuation(segments[i]["text"]):
             merged.append(segments[i])
             i += 1
@@ -207,6 +282,8 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
         boundary_found = False
         while j < len(segments):
             next_txt = segments[j]["text"]
+            if is_isolated_tag(next_txt):   # don't pull a tag into dialogue
+                break
             prev_txt = segments[j - 1]["text"]
             if next_txt and next_txt[0].isupper() and next_txt[0] != "I":
                 # A capitalised next word signals a new sentence -- unless the
@@ -257,6 +334,10 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
     i = 0
     while i < len(segments):
         curr = segments[i]
+        if is_isolated_tag(curr["text"]):
+            merged.append(curr)
+            i += 1
+            continue
         if has_terminal_punctuation(curr["text"]):
             merged.append(curr)
             i += 1
@@ -265,6 +346,8 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
         j = i + 1
         while j < len(segments):
             nxt = segments[j]
+            if is_isolated_tag(nxt["text"]):
+                break
             combined = acc["text"] + " " + nxt["text"]
             if has_terminal_punctuation(acc["text"]):
                 break
@@ -272,7 +355,7 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
                 break
             if not check_if_text_can_be_split_prettily(combined):
                 break
-            if (time_to_ms(nxt["end"]) - time_to_ms(acc["start"])) >= MAX_DURATION_MS:
+            if (time_to_ms(nxt["end"]) - time_to_ms(acc["start"])) >= _max_duration_ms:
                 break
             acc = {"start": acc["start"], "end": nxt["end"],
                    "start_source": acc.get("start_source"),
@@ -298,7 +381,7 @@ def process_phase3(segments: List[Dict]) -> List[Dict]:
 def run_iterative_merging(segments: List[Dict]) -> List[Dict]:
     """Drive the phase sweep with the growing character budget."""
     print("\n" + "=" * 60 + "\nAPPLYING ITERATIVE MERGING & BALANCING")
-    for i in range(ITERATION_START, ITERATION_END + 1):
+    for i in range(ITERATION_START, _cue_char_budget() + 1):
         set_max_chars(i)
         if i % 10 == 0:
             print(f"   ... iteration limit: {i}")
@@ -314,8 +397,8 @@ def run_iterative_merging(segments: List[Dict]) -> List[Dict]:
 OVERLAP_GAP_MS = 1
 
 
-def resolve_overlaps(segments: List[Dict]) -> List[Dict]:
-    """Remove overlaps between consecutive sentence cues.
+def _resolve_overlaps_once(segments: List[Dict]) -> int:
+    """One forward pass of overlap removal; returns how many cues it adjusted.
 
     Priority rules, tuned to how the engines actually behave:
       1. Never move a Vosk timestamp -- Vosk is the timing authority (Whisper
@@ -363,9 +446,76 @@ def resolve_overlaps(segments: List[Dict]) -> List[Dict]:
             if new_end < cur_end:
                 cur["end"] = ms_to_time(new_end)
                 fixed += 1
-    if fixed:
-        print(f"[ok] Resolved {fixed} cue overlap(s)")
+    return fixed
+
+
+def resolve_overlaps(segments: List[Dict], max_passes: int = 6) -> List[Dict]:
+    """Iterate overlap removal to a fixed point.
+
+    A single forward pass can leave a residual overlap when resolving one pair
+    nudges a boundary into its neighbour; repeat until nothing changes (or a
+    safety cap) so overlaps reach zero.
+    """
+    total = 0
+    for _ in range(max_passes):
+        fixed = _resolve_overlaps_once(segments)
+        total += fixed
+        if fixed == 0:
+            break
+    if total:
+        print(f"[ok] Resolved {total} cue overlap(s)")
     return segments
+
+
+# Minimum on-screen time a cue may have. Sub-frame cues (e.g. from ASR words
+# whose timestamps collapsed onto one instant) are extended or merged away.
+MIN_CUE_MS = 700
+
+
+def enforce_min_duration(segments: List[Dict],
+                         min_ms: int = MIN_CUE_MS) -> List[Dict]:
+    """Guarantee a readable minimum duration for every cue.
+
+    Two passes: first extend a too-short cue's END into the free gap before the
+    next cue (never creating an overlap); then merge any cue that is *still*
+    degenerate (crammed with no room) into the previous cue, folding its text in
+    and re-balancing. The word-level SRT is untouched.
+    """
+    if not segments:
+        return segments
+
+    # Pass 1: extend short cues into available space.
+    for i in range(len(segments)):
+        s = time_to_ms(segments[i]["start"])
+        e = time_to_ms(segments[i]["end"])
+        if e - s >= min_ms:
+            continue
+        if i + 1 < len(segments):
+            ceiling = time_to_ms(segments[i + 1]["start"]) - OVERLAP_GAP_MS
+        else:
+            ceiling = s + min_ms
+        new_e = max(e, min(s + min_ms, ceiling))
+        segments[i]["end"] = ms_to_time(new_e)
+
+    # Pass 2: merge any cue still far too short into the previous one.
+    out: List[Dict] = []
+    merged = 0
+    for seg in segments:
+        dur = time_to_ms(seg["end"]) - time_to_ms(seg["start"])
+        if out and dur < min_ms // 3:
+            prev = out[-1]
+            if time_to_ms(seg["end"]) > time_to_ms(prev["end"]):
+                prev["end"] = seg["end"]
+                prev["end_source"] = seg.get("end_source", prev.get("end_source"))
+            joined = (prev["text"].replace("\n", " ").strip() + " "
+                      + seg["text"].replace("\n", " ").strip()).strip()
+            prev["text"] = balance_block_enhanced(joined)
+            merged += 1
+        else:
+            out.append(dict(seg))
+    if merged:
+        print(f"[ok] Merged {merged} sub-frame cue(s) into neighbours")
+    return out
 
 
 def longest_line_length(content: str) -> int:
@@ -391,9 +541,9 @@ def validate_srt_output(entries, name: str) -> Dict[str, int]:
             issues["gaps_large"] += 1
     # Per-entry checks: must cover every entry, including the last one.
     for entry in entries:
-        if (entry.end - entry.start).total_seconds() * 1000 > MAX_DURATION_MS:
+        if (entry.end - entry.start).total_seconds() * 1000 > _max_duration_ms:
             issues["duration_long"] += 1
-        if longest_line_length(entry.content) > MAX_CPL:
+        if longest_line_length(entry.content) > _max_cpl:
             issues["cpl_high"] += 1
     print(f"  Issues found: {sum(issues.values())}")
     for issue_type, count in issues.items():

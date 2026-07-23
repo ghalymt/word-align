@@ -1,9 +1,8 @@
 """word-align: word-accurate subtitle timing via multi-engine alignment."""
-# 0.10.0: Qwen3-ASR replaces NeMo as the default ensemble voter -- a *timed*
-# challenger (word timestamps via Qwen3-ForcedAligner) reached through a
-# subprocess bridge to its own venv. Ensemble mode is now verified end-to-end
-# on GPU: vote weight follows transcription accuracy (WhisperX > Qwen > Vosk),
-# Vosk seeds the timing, and the consensus is line-structured so segmentation
-# no longer collapses to a single cue. Builds on 0.9.x (Windows mp guard,
-# abbreviation-aware splitting, source-aware overlap resolution).
-__version__ = "0.10.0"
+# 0.11.0: configurable subtitle layout -- per-line CPL x line count (42x2 for
+# regular video, 32x2 for vertical), max duration, min cue duration -- plus a
+# "no-panic" balancer that never forces an ugly break, isolated-tag protection,
+# overlap resolution iterated to zero, and a minimum-duration guard that clears
+# sub-frame cues. 0.10.0 added the Qwen3-ASR timed ensemble voter; 0.9.x fixed
+# the Windows mp guard, abbreviation splitting, and source-aware overlaps.
+__version__ = "0.11.0"

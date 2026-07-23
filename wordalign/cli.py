@@ -22,9 +22,9 @@ from .align import (interpolate_timestamps, make_surgical_mfa,
 from .config import PipelineConfig
 from .ensemble import (build_consensus, consensus_to_structured_text,
                       consensus_to_text)
-from .segment import (parse_human_transcript_to_srt_segments,
-                      resolve_overlaps, run_iterative_merging,
-                      validate_srt_output)
+from .segment import (enforce_min_duration,
+                      parse_human_transcript_to_srt_segments, resolve_overlaps,
+                      run_iterative_merging, set_layout, validate_srt_output)
 from .utils import (detect_language, extract_tags_from_transcript,
                     normalize_word, strip_tags, time_to_ms)
 
@@ -79,6 +79,15 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--no-doc-timestamps", action="store_true",
                    help="omit [HH:MM:SS] paragraph timestamps in the "
                         "transcript document")
+    p.add_argument("--max-cpl", type=int, default=42,
+                   help="max characters per subtitle line "
+                        "(42 = regular video, 32 = vertical/social; default 42)")
+    p.add_argument("--max-lines", type=int, default=2,
+                   help="max lines per cue (default 2)")
+    p.add_argument("--max-duration-ms", type=int, default=7000,
+                   help="max on-screen duration per cue, ms (default 7000)")
+    p.add_argument("--min-cue-ms", type=int, default=700,
+                   help="minimum on-screen duration per cue, ms (default 700)")
     p.add_argument("--version", action="version",
                    version=f"%(prog)s {__version__}")
     a = p.parse_args(argv)
@@ -102,6 +111,10 @@ def _parse_args(argv=None) -> PipelineConfig:
         qwen_chunk_seconds=a.qwen_chunk_seconds,
         doc_format=a.doc,
         doc_timestamps=not a.no_doc_timestamps,
+        max_cpl=a.max_cpl,
+        max_lines=a.max_lines,
+        max_duration_ms=a.max_duration_ms,
+        min_cue_ms=a.min_cue_ms,
     )
 
 
@@ -253,10 +266,13 @@ def main(argv=None) -> int:
     print_alignment_statistics(aligned_words)
 
     # ---------------------------------------------------------- segmenting
+    set_layout(cfg.max_cpl, cfg.max_lines, cfg.max_duration_ms)
     initial_segments = parse_human_transcript_to_srt_segments(
         original_text, aligned_words)
     segments = run_iterative_merging(initial_segments)
     segments = resolve_overlaps(segments)
+    segments = enforce_min_duration(segments, cfg.min_cue_ms)
+    segments = resolve_overlaps(segments)   # tidy any overlap the merge created
 
     # ------------------------------------------------------------- outputs
     base = cfg.resolve_output_base()

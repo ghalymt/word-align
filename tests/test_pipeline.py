@@ -12,9 +12,11 @@ from wordalign.align import interpolate_timestamps, match_timestamps
 from wordalign.document import (group_into_paragraphs, group_into_sentences,
                                 write_txt)
 from wordalign.ensemble import build_consensus, consensus_to_text
-from wordalign.segment import (parse_human_transcript_to_srt_segments,
+from wordalign.segment import (balance_block_enhanced, enforce_min_duration,
+                               is_isolated_tag,
+                               parse_human_transcript_to_srt_segments,
                                process_phase1, resolve_overlaps,
-                               run_iterative_merging, set_max_chars,
+                               run_iterative_merging, set_layout, set_max_chars,
                                validate_srt_output)
 from wordalign.utils import (ends_with_nonterminal_abbreviation,
                              has_terminal_punctuation, ms_to_time,
@@ -274,6 +276,76 @@ def test_consensus_structured_text_breaks_into_lines():
     assert lines[0] == "Hello there.", lines
     assert "A long pause" in text
     assert len(lines) >= 2 and all(len(ln) <= 60 for ln in lines), lines
+
+
+def test_configurable_cpl_limit():
+    """Per-line limit is runtime-configurable (42 regular / 32 vertical)."""
+    try:
+        set_layout(max_cpl=42, max_lines=2)
+        assert "\n" not in balance_block_enhanced("x" * 40)       # fits 42
+        set_layout(max_cpl=32, max_lines=2)
+        out = balance_block_enhanced("alpha beta gamma delta epsilon zeta eta")
+        assert "\n" in out                                        # must break at 32
+        assert all(len(ln) <= 32 for ln in out.split("\n")), out
+    finally:
+        set_layout(max_cpl=32, max_lines=2, max_duration_ms=3000)
+
+
+def test_balancer_no_panic_leaves_unsplittable_line():
+    """No clean split -> leave the line intact for review, never force a
+    mid-word break."""
+    try:
+        set_layout(max_cpl=32, max_lines=2)
+        long_token = "a" + "b" * 50            # 51 chars, no whitespace to split
+        assert balance_block_enhanced(long_token) == long_token
+        assert "\n" not in balance_block_enhanced(long_token)
+    finally:
+        set_layout(max_cpl=32, max_lines=2, max_duration_ms=3000)
+
+
+def test_isolated_tag_never_merged():
+    assert is_isolated_tag("[music]") and not is_isolated_tag("hi [music]")
+    set_max_chars(64)
+    segs = [
+        {"index": 1, "start": "00:00:00,000", "end": "00:00:01,000",
+         "text": "Hello there"},
+        {"index": 2, "start": "00:00:01,000", "end": "00:00:02,000",
+         "text": "[music]"},
+        {"index": 3, "start": "00:00:02,000", "end": "00:00:03,000",
+         "text": "world now"},
+    ]
+    out = process_phase1([dict(s) for s in segs])
+    assert any(s["text"].strip() == "[music]" for s in out), out
+
+
+def test_enforce_min_duration_extends_and_merges():
+    # A short cue with room after it is extended to the minimum.
+    segs = [{"start": "00:00:00,000", "end": "00:00:00,100", "text": "a"},
+            {"start": "00:00:05,000", "end": "00:00:06,000", "text": "b"}]
+    out = enforce_min_duration([dict(s) for s in segs], min_ms=700)
+    assert time_to_ms(out[0]["end"]) - time_to_ms(out[0]["start"]) >= 700
+    # A 1 ms cue crammed against the next cue is merged into the previous one.
+    segs2 = [{"start": "00:00:00,000", "end": "00:00:02,000", "text": "hello"},
+             {"start": "00:00:02,000", "end": "00:00:02,001", "text": "world"},
+             {"start": "00:00:02,001", "end": "00:00:05,000", "text": "there"}]
+    out2 = enforce_min_duration([dict(s) for s in segs2], min_ms=700)
+    assert len(out2) == 2, out2
+    assert "world" in out2[0]["text"] and "hello" in out2[0]["text"]
+
+
+def test_overlap_resolution_reaches_zero_on_a_chain():
+    segs = [
+        {"start": "00:00:00,000", "end": "00:00:03,000",
+         "start_source": "Vosk", "end_source": "Interpolated", "text": "a"},
+        {"start": "00:00:01,000", "end": "00:00:03,500",
+         "start_source": "Interpolated", "end_source": "Interpolated", "text": "b"},
+        {"start": "00:00:02,000", "end": "00:00:04,000",
+         "start_source": "Interpolated", "end_source": "Interpolated", "text": "c"},
+    ]
+    out = resolve_overlaps(segs)
+    ov = sum(1 for i in range(len(out) - 1)
+             if time_to_ms(out[i]["end"]) > time_to_ms(out[i + 1]["start"]))
+    assert ov == 0, out
 
 
 def test_qwen_worker_output_parsing():
