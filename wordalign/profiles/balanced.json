@@ -1,0 +1,17 @@
+{
+    "schema_version": 1,
+    "name": "Balanced",
+    "description": "WhisperX + Qwen + Vosk. Full waterfall, deterministic QA.",
+    "mode": "auto",
+    "transcription": {
+        "engines": [
+            {"plugin": "whisperx", "enabled": true, "model": "large-v3", "weight": 1.0, "backbone": true, "device": "cuda"},
+            {"plugin": "qwen_asr", "enabled": true, "model": "qwen3-asr-1.7b", "weight": 0.85, "device": "cuda"},
+            {"plugin": "vosk", "enabled": true, "model": "vosk-model-en-us-0.22", "weight": 0.55}
+        ]
+    },
+    "timing": {"strategy": "fill_only", "order": ["vosk", "rough_srt", "whisperx", "mfa", "interpolation"]},
+    "qa": {"enabled": true, "signals": {"ensemble_disagreement": {"enabled": true}, "repetition": {"enabled": true}, "timing_anomaly": {"enabled": true}}},
+    "segmentation": {"max_cpl": 42, "max_lines": 2, "max_duration_ms": 7000, "min_cue_ms": 700},
+    "export": {"word_srt": true, "sentence_srt": true, "transcript_format": "txt", "transcript_timestamps": true, "tags": false}
+}
