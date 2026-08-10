@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WordAlign — Smart Subtitle Alignment</title>
+<style>
+:root {
+  --bg: #fafafa; --surface: #ffffff; --border: #e0e0e0;
+  --text: #1a1a1a; --text-secondary: #666; --text-muted: #999;
+  --accent: #1a3a5c; --accent-light: #2d5a8a; --accent-bg: #e8eef4;
+  --success: #2d7a3d; --success-bg: #e6f3e8;
+  --warning: #b8860b; --warning-bg: #fdf6e3;
+  --danger: #c44; --danger-bg: #fce8e8;
+  --mono: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  --sans: -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--sans); background: var(--bg); color: var(--text); font-size: 14px; }
+.app { display: flex; height: 100vh; overflow: hidden; }
+.sidebar { width: 220px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-header { padding: 20px 16px 12px; border-bottom: 1px solid var(--border); }
+.sidebar-header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; }
+.sidebar-header .version { font-size: 11px; color: var(--text-muted); font-family: var(--mono); margin-top: 2px; }
+.nav { flex: 1; padding: 8px 0; overflow-y: auto; }
+.nav-item { padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-secondary); transition: background 0.15s, color 0.15s; border-left: 3px solid transparent; }
+.nav-item:hover { background: var(--bg); color: var(--text); }
+.nav-item.active { background: var(--accent-bg); color: var(--accent); border-left-color: var(--accent); font-weight: 500; }
+.nav-item .icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+.sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }
+.content { flex: 1; overflow-y: auto; padding: 32px 40px; }
+.page { display: none; }
+.page.active { display: block; }
+.page-header { margin-bottom: 28px; }
+.page-header h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+.page-header p { color: var(--text-secondary); font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 24px; margin-bottom: 20px; }
+.card h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--accent); }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 13px; cursor: pointer; font-family: var(--sans); color: var(--text); transition: all 0.15s; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent-light); border-color: var(--accent-light); color: white; }
+.btn-danger { color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { background: var(--danger-bg); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 16px; }
+.mode-card { background: var(--surface); border: 2px solid var(--border); border-radius: 8px; padding: 24px; cursor: pointer; transition: border-color 0.2s, transform 0.1s; }
+.mode-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.mode-card .icon { font-size: 28px; margin-bottom: 12px; }
+.mode-card h4 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.mode-card p { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+.preset-card { background: var(--surface); border: 2px solid var(--border); border-radius: 6px; padding: 16px; cursor: pointer; text-align: center; transition: all 0.2s; }
+.preset-card:hover { border-color: var(--accent); }
+.preset-card.selected { border-color: var(--accent); background: var(--accent-bg); }
+.preset-card .label { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.preset-card .desc { font-size: 11px; color: var(--text-muted); }
+.preset-card .speed { font-size: 11px; color: var(--accent); margin-top: 6px; font-family: var(--mono); }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; color: var(--text-secondary); }
+.form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; font-family: var(--sans); background: var(--surface); }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
+.file-drop { border: 2px dashed var(--border); border-radius: 6px; padding: 32px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+.file-drop:hover { border-color: var(--accent); }
+.file-drop .icon { font-size: 32px; color: var(--text-muted); margin-bottom: 8px; }
+.file-drop p { color: var(--text-secondary); font-size: 13px; }
+.file-drop .filename { color: var(--accent); font-weight: 500; margin-top: 8px; }
+.progress-container { margin-top: 20px; }
+.progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+.progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
+.progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
+.log { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 6px; font-family: var(--mono); font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.6; }
+.log .info { color: #6ab0f3; }
+.log .warn { color: #f0c674; }
+.log .error { color: #e06c75; }
+.log .ok { color: #98c379; }
+.engine-list { display: flex; flex-direction: column; gap: 8px; }
+.engine-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); }
+.engine-row .name { font-weight: 500; font-size: 13px; }
+.engine-row .meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.engine-row .status { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+.status-ready { background: var(--success-bg); color: var(--success); }
+.status-missing { background: var(--danger-bg); color: var(--danger); }
+.status-warning { background: var(--warning-bg); color: var(--warning); }
+.toggle { position: relative; width: 36px; height: 20px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border-radius: 10px; transition: 0.2s; }
+.toggle .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background: white; border-radius: 50%; transition: 0.2s; }
+.toggle input:checked + .slider { background: var(--accent); }
+.toggle input:checked + .slider:before { transform: translateX(16px); }
+.model-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.model-card { border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--surface); }
+.model-card .header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; }
+.model-card .name { font-weight: 600; font-size: 13px; }
+.model-card .badge { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--accent-bg); color: var(--accent); }
+.model-card .info { font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.model-card .actions { display: flex; gap: 8px; margin-top: 12px; }
+.review-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
+.transcript-view { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 24px; min-height: 400px; font-size: 14px; line-height: 1.8; }
+.transcript-view .word { display: inline; cursor: pointer; padding: 1px 2px; border-radius: 2px; transition: background 0.15s; }
+.transcript-view .word:hover { background: var(--accent-bg); }
+.transcript-view .word.low-conf { background: var(--warning-bg); border-bottom: 2px solid var(--warning); }
+.transcript-view .word.disagreement { background: var(--danger-bg); border-bottom: 2px solid var(--danger); }
+.transcript-view .word.interpolated { border-bottom: 2px dashed var(--text-muted); }
+.issue-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 20px; }
+.issue-panel h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--accent); }
+.issue-item { border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s; }
+.issue-item:hover { border-color: var(--accent); }
+.issue-item .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.issue-item .category { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.issue-item .severity-high { color: var(--danger); }
+.issue-item .severity-medium { color: var(--warning); }
+.issue-item .severity-low { color: var(--text-muted); }
+.issue-item .time { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.issue-item .text { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.issue-item .explanation { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.issue-item .actions { display: flex; gap: 6px; margin-top: 8px; }
+.waveform-placeholder { height: 60px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px; margin-bottom: 16px; }
+.hw-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.hw-item { padding: 16px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); }
+.hw-item .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+.hw-item .value { font-size: 14px; font-weight: 500; font-family: var(--mono); }
+.hw-item .value.ok { color: var(--success); }
+.hw-item .value.warn { color: var(--warning); }
+.hw-item .value.bad { color: var(--danger); }
+.stat-row { display: flex; gap: 24px; margin-bottom: 20px; }
+.stat { }
+.stat .num { font-size: 28px; font-weight: 300; color: var(--accent); font-family: var(--mono); }
+.stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table th { text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+table tr:hover td { background: var(--bg); }
+.badge-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.badge-tag { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--bg); border: 1px solid var(--border); color: var(--text-secondary); }
+@media (max-width: 768px) {
+  .sidebar { width: 60px; } .sidebar-header h1, .sidebar-footer { display: none; }
+  .nav-item span:not(.icon) { display: none; }
+  .content { padding: 20px; } .review-layout { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h1>WordAlign</h1>
+      <div class="version">v2.0.0-dev</div>
+    </div>
+    <div class="nav">
+      <div class="nav-item active" data-page="home"><span class="icon">⌂</span><span>Home</span></div>
+      <div class="nav-item" data-page="project"><span class="icon">📁</span><span>New Project</span></div>
+      <div class="nav-item" data-page="review"><span class="icon">👁</span><span>Review</span></div>
+      <div class="nav-item" data-page="models"><span class="icon">⬇</span><span>Models</span></div>
+      <div class="nav-item" data-page="engines"><span class="icon">⚙</span><span>Engines</span></div>
+      <div class="nav-item" data-page="pipelines"><span class="icon">📋</span><span>Pipelines</span></div>
+      <div class="nav-item" data-page="diagnostics"><span class="icon">📊</span><span>Diagnostics</span></div>
+    </div>
+    <div class="sidebar-footer">
+      MIT License · <a href="https://github.com/ghalymt/word-align" target="_blank">GitHub</a>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- HOME -->
+    <div class="page active" id="page-home">
+      <div class="page-header">
+        <h2>Welcome to WordAlign</h2>
+        <p>Word-accurate subtitle timing from any transcript + audio — or from audio alone.</p>
+      </div>
+      <div class="card">
+        <h3>What do you want to do?</h3>
+        <div class="mode-grid">
+          <div class="mode-card" onclick="navigate('project')">
+            <div class="icon">🎬</div>
+            <h4>Create subtitles from audio/video</h4>
+            <p>Ensemble mode: engines vote on the transcript, then align timing.</p>
+          </div>
+          <div class="mode-card" onclick="navigate('project')">
+            <div class="icon">📝</div>
+            <h4>Align an existing transcript</h4>
+            <p>Reference mode: you have a verbatim transcript, we time-align every word.</p>
+          </div>
+          <div class="mode-card" onclick="navigate('review')">
+            <div class="icon">👁</div>
+            <h4>Review a completed project</h4>
+            <p>Jump to uncertain transcript sections, listen, edit, and export.</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Quick Start</h3>
+        <p style="font-size:13px; color:var(--text-secondary); line-height:1.7; margin-bottom:16px;">
+          Choose a quality preset, select your audio file, and click Run. WordAlign handles
+          engine selection, model loading, timing waterfall, ensemble voting, and subtitle
+          segmentation automatically.
+        </p>
+        <div class="stat-row">
+          <div class="stat"><div class="num">5</div><div class="label">Engines</div></div>
+          <div class="stat"><div class="num">7+</div><div class="label">Languages</div></div>
+          <div class="stat"><div class="num">3</div><div class="label">QA Signals</div></div>
+          <div class="stat"><div class="num">61</div><div class="label">Tests</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEW PROJECT -->
+    <div class="page" id="page-project">
+      <div class="page-header">
+        <h2>New Project</h2>
+        <p>Choose your input files and quality level.</p>
+      </div>
+      <div class="card">
+        <h3>Step 1: Choose audio or video file</h3>
+        <div class="file-drop" id="audio-drop" onclick="document.getElementById('audio-input').click()">
+          <div class="icon">🎵</div>
+          <p>Drop audio/video here or click to browse</p>
+          <p class="filename" id="audio-filename"></p>
+          <input type="file" id="audio-input" accept="audio/*,video/*" style="display:none" onchange="handleFileSelect(this, 'audio-filename')">
+        </div>
+      </div>
+      <div class="card">
+        <h3>Step 2: Transcript (optional)</h3>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+          If you have a verbatim transcript, attach it for reference mode.
+          Leave empty for ensemble transcription.
+        </p>
+        <div class="file-drop" id="transcript-drop" onclick="document.getElementById('transcript-input').click()">
+          <div class="icon">📄</div>
+          <p>Drop transcript here or click to browse (.txt)</p>
+          <p class="filename" id="transcript-filename"></p>
+          <input type="file" id="transcript-input" accept=".txt,text/plain" style="display:none" onchange="handleFileSelect(this, 'transcript-filename')">
+        </div>
+      </div>
+      <div class="card">
+        <h3>Step 3: Quality preset</h3>
+        <div class="preset-grid">
+          <div class="preset-card selected" data-preset="balanced">
+            <div class="label">Fast</div>
+            <div class="desc">Vosk + WhisperX</div>
+            <div class="speed">⚡ Fastest</div>
+          </div>
+          <div class="preset-card" data-preset="balanced">
+            <div class="label">Balanced</div>
+            <div class="desc">WhisperX + Qwen + Vosk</div>
+            <div class="speed">⚖ Recommended</div>
+          </div>
+          <div class="preset-card" data-preset="maximum_quality">
+            <div class="label">Best Quality</div>
+            <div class="desc">All engines + MFA + QA</div>
+            <div class="speed">🐌 Slowest</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Step 4: Language</h3>
+        <div class="form-group">
+          <select id="language-select">
+            <option value="">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="nl">Dutch</option>
+            <option value="ru">Russian</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ar">Arabic</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="startPipeline()" style="font-size:14px; padding:12px 32px;">
+        ▶ Run Pipeline
+      </button>
+      <div class="progress-container" id="progress-container" style="display:none;">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+        <div class="progress-label">
+          <span id="progress-stage">Initializing...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="log" id="pipeline-log" style="margin-top:12px;"></div>
+        <button class="btn btn-danger btn-sm" onclick="cancelPipeline()" style="margin-top:12px;">Cancel</button>
+      </div>
+    </div>
+
+    <!-- REVIEW -->
+    <div class="page" id="page-review">
+      <div class="page-header">
+        <h2>Transcript Review</h2>
+        <p>Review uncertain sections flagged by the Smart QA system.</p>
+      </div>
+      <div class="waveform-placeholder">
+        📊 Waveform visualization (peaks cached for fast rendering)
+      </div>
+      <div style="margin-bottom:12px; display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-sm">▶ Play</button>
+        <button class="btn btn-sm">⏮ Prev Issue</button>
+        <button class="btn btn-sm">⏭ Next Issue</button>
+        <span style="font-family:var(--mono); font-size:12px; color:var(--text-muted); margin-left:auto;">00:00:00.000</span>
+      </div>
+      <div class="review-layout">
+        <div class="transcript-view" id="transcript-view">
+          <p style="color:var(--text-muted); text-align:center; padding:40px;">
+            No transcript loaded. Run a pipeline first, then return here to review.
+          </p>
+          <p>The transcript will appear here with highlighted words:</p>
+          <p style="margin-top:12px;">
+            <span class="word">Normal</span> <span class="word">text</span> <span class="word">appears</span>
+            <span class="word low-conf">like_this</span> <span class="word">and</span>
+            <span class="word disagreement">disagreements</span> <span class="word">show</span>
+            <span class="word interpolated">differently</span>.
+          </p>
+          <p style="margin-top:12px; font-size:12px; color:var(--text-muted);">
+            Legend: <span style="background:var(--warning-bg); border-bottom:2px solid var(--warning); padding:1px 4px;">Low confidence</span>
+            <span style="background:var(--danger-bg); border-bottom:2px solid var(--danger); padding:1px 4px; margin-left:4px;">Engine disagreement</span>
+            <span style="border-bottom:2px dashed var(--text-muted); padding:1px 4px; margin-left:4px;">Interpolated</span>
+          </p>
+        </div>
+        <div class="issue-panel">
+          <h3>Issues (0)</h3>
+          <div class="form-group">
+            <select style="font-size:12px;">
+              <option>All Issues</option>
+              <option>High Risk</option>
+              <option>Low Agreement</option>
+              <option>Timing</option>
+              <option>Repetition</option>
+            </select>
+          </div>
+          <div id="issue-list">
+            <p style="font-size:12px; color:var(--text-muted); text-align:center; padding:20px;">
+              No issues detected. Run the QA engine to populate this list.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODELS -->
+    <div class="page" id="page-models">
+      <div class="page-header">
+        <h2>Model Manager</h2>
+        <p>Download, validate, and manage alignment models.</p>
+      </div>
+      <div class="card">
+        <h3>Available Models</h3>
+        <div class="model-list" id="model-list">
+          <div class="model-card">
+            <div class="header">
+              <span class="name">Whisper Large v3</span>
+              <span class="badge">Recommended</span>
+            </div>
+            <div class="info">Plugin: whisperx · 3.0 GB · 99 languages<br>VRAM: 10 GB min, 12 GB recommended</div>
+            <div class="actions">
+              <button class="btn btn-sm btn-primary">Download</button>
+              <button class="btn btn-sm">Use Existing...</button>
+            </div>
+          </div>
+          <div class="model-card">
+            <div class="header">
+              <span class="name">Qwen3 ASR 1.7B</span>
+              <span class="badge">Recommended</span>
+            </div>
+            <div class="info">Plugin: qwen_asr · 3.4 GB · 30+ languages<br>VRAM: 8 GB min, 12 GB recommended</div>
+            <div class="actions">
+              <button class="btn btn-sm btn-primary">Download</button>
+              <button class="btn btn-sm">Use Existing...</button>
+            </div>
+          </div>
+          <div class="model-card">
+            <div class="header">
+              <span class="name">Vosk English US 0.22</span>
+              <span class="badge">Recommended</span>
+            </div>
+            <div class="info">Plugin: vosk · 1.8 GB · English only<br>CPU only · 2 GB RAM min</div>
+            <div class="actions">
+              <button class="btn btn-sm btn-primary">Download</button>
+              <button class="btn btn-sm">Use Existing...</button>
+            </div>
+          </div>
+          <div class="model-card">
+            <div class="header">
+              <span class="name">MFA English US ARPA</span>
+              <span class="badge">Optional</span>
+            </div>
+            <div class="info">Plugin: mfa · 500 MB · English only<br>Forced alignment · CPU only</div>
+            <div class="actions">
+              <button class="btn btn-sm">Configure</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ENGINES -->
+    <div class="page" id="page-engines">
+      <div class="page-header">
+        <h2>Engines</h2>
+        <p>View and configure available alignment engines.</p>
+      </div>
+      <div class="card">
+        <h3>Registered Engines</h3>
+        <table>
+          <thead><tr><th>Engine</th><th>Capabilities</th><th>Runtime</th><th>Languages</th><th>Status</th><th>Enabled</th></tr></thead>
+          <tbody id="engine-table">
+            <tr>
+              <td><strong>WhisperX</strong><div style="font-size:11px;color:var(--text-muted)">v1.0</div></td>
+              <td><div class="badge-row"><span class="badge-tag">transcribe</span><span class="badge-tag">word_timing</span><span class="badge-tag">vote</span></div></td>
+              <td>in_process</td>
+              <td>*</td>
+              <td><span class="status status-ready">Ready</span></td>
+              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><strong>Vosk</strong><div style="font-size:11px;color:var(--text-muted)">v1.0</div></td>
+              <td><div class="badge-row"><span class="badge-tag">transcribe</span><span class="badge-tag">word_timing</span><span class="badge-tag">vote</span></div></td>
+              <td>in_process</td>
+              <td>20+</td>
+              <td><span class="status status-ready">Ready</span></td>
+              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><strong>Qwen ASR</strong><div style="font-size:11px;color:var(--text-muted)">v1.0</div></td>
+              <td><div class="badge-row"><span class="badge-tag">transcribe</span><span class="badge-tag">word_timing</span><span class="badge-tag">vote</span></div></td>
+              <td>subprocess</td>
+              <td>30+</td>
+              <td><span class="status status-missing">Missing</span></td>
+              <td><label class="toggle"><input type="checkbox"><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><strong>MFA</strong><div style="font-size:11px;color:var(--text-muted)">v1.0</div></td>
+              <td><div class="badge-row"><span class="badge-tag">forced_align</span></div></td>
+              <td>external</td>
+              <td>en</td>
+              <td><span class="status status-warning">Not found</span></td>
+              <td><label class="toggle"><input type="checkbox"><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><strong>YAMNet</strong><div style="font-size:11px;color:var(--text-muted)">v1.0</div></td>
+              <td><div class="badge-row"><span class="badge-tag">audio_events</span></div></td>
+              <td>in_process</td>
+              <td>*</td>
+              <td><span class="status status-missing">Missing</span></td>
+              <td><label class="toggle"><input type="checkbox"><span class="slider"></span></label></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- PIPELINES -->
+    <div class="page" id="page-pipelines">
+      <div class="page-header">
+        <h2>Pipeline Profiles</h2>
+        <p>Configure engine selection, timing order, and QA settings.</p>
+      </div>
+      <div class="card">
+        <h3>Transcription Engines</h3>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+          Engines that participate in ensemble voting. Backbone provides the word sequence;
+          others vote on corrections. Drag to reorder timing priority.
+        </p>
+        <div class="engine-list">
+          <div class="engine-row">
+            <div><div class="name">WhisperX</div><div class="meta">Backbone · Weight: 1.00 · large-v3</div></div>
+            <div style="display:flex; gap:12px; align-items:center;">
+              <input type="range" min="0" max="2" step="0.05" value="1.0" style="width:80px;">
+              <span style="font-family:var(--mono); font-size:12px;">1.00</span>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="engine-row">
+            <div><div class="name">Qwen ASR</div><div class="meta">Timed challenger · Weight: 0.85</div></div>
+            <div style="display:flex; gap:12px; align-items:center;">
+              <input type="range" min="0" max="2" step="0.05" value="0.85" style="width:80px;">
+              <span style="font-family:var(--mono); font-size:12px;">0.85</span>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="engine-row">
+            <div><div class="name">Vosk</div><div class="meta">Timestamp authority · Weight: 0.55</div></div>
+            <div style="display:flex; gap:12px; align-items:center;">
+              <input type="range" min="0" max="2" step="0.05" value="0.55" style="width:80px;">
+              <span style="font-family:var(--mono); font-size:12px;">0.55</span>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Timing Waterfall Order</h3>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+          Engines fill timestamps in this order (fill-only: later stages never overwrite earlier matches).
+        </p>
+        <div class="engine-list">
+          <div class="engine-row"><div><span style="font-family:var(--mono);color:var(--text-muted);">1.</span> Vosk</div><span class="badge-tag">↑↓ drag</span></div>
+          <div class="engine-row"><div><span style="font-family:var(--mono);color:var(--text-muted);">2.</span> Rough SRT (optional)</div><span class="badge-tag">↑↓ drag</span></div>
+          <div class="engine-row"><div><span style="font-family:var(--mono);color:var(--text-muted);">3.</span> WhisperX</div><span class="badge-tag">↑↓ drag</span></div>
+          <div class="engine-row"><div><span style="font-family:var(--mono);color:var(--text-muted);">4.</span> MFA (surgical)</div><span class="badge-tag">↑↓ drag</span></div>
+          <div class="engine-row"><div><span style="font-family:var(--mono);color:var(--text-muted);">5.</span> Interpolation</div><span class="badge-tag">always last</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Segmentation</h3>
+        <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:16px;">
+          <div class="form-group"><label>Max CPL (characters per line)</label><input type="number" value="42"></div>
+          <div class="form-group"><label>Max lines per cue</label><input type="number" value="2"></div>
+          <div class="form-group"><label>Max duration (ms)</label><input type="number" value="7000"></div>
+          <div class="form-group"><label>Min cue duration (ms)</label><input type="number" value="700"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Smart QA</h3>
+        <div class="engine-list">
+          <div class="engine-row"><div><div class="name">Ensemble Disagreement</div><div class="meta">Flags low-confidence words</div></div><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="engine-row"><div><div class="name">Repetition Detection</div><div class="meta">Detects hallucination patterns</div></div><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="engine-row"><div><div class="name">Timing Anomaly Detection</div><div class="meta">Flags impossible rates, overlaps, interpolation runs</div></div><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="engine-row"><div><div class="name">LLM Semantic Review</div><div class="meta">Local or remote LLM checks for semantic anomalies</div></div><label class="toggle"><input type="checkbox"><span class="slider"></span></label></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIAGNOSTICS -->
+    <div class="page" id="page-diagnostics">
+      <div class="page-header">
+        <h2>Diagnostics</h2>
+        <p>System information and hardware detection.</p>
+      </div>
+      <div class="card">
+        <h3>Hardware</h3>
+        <div class="hw-grid" id="hw-grid">
+          <div class="hw-item"><div class="label">Operating System</div><div class="value" id="hw-os">—</div></div>
+          <div class="hw-item"><div class="label">CPU</div><div class="value" id="hw-cpu">—</div></div>
+          <div class="hw-item"><div class="label">RAM</div><div class="value" id="hw-ram">—</div></div>
+          <div class="hw-item"><div class="label">GPU</div><div class="value" id="hw-gpu">—</div></div>
+          <div class="hw-item"><div class="label">VRAM</div><div class="value" id="hw-vram">—</div></div>
+          <div class="hw-item"><div class="label">CUDA</div><div class="value" id="hw-cuda">—</div></div>
+          <div class="hw-item"><div class="label">FFmpeg</div><div class="value" id="hw-ffmpeg">—</div></div>
+          <div class="hw-item"><div class="label">Disk Free</div><div class="value" id="hw-disk">—</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>System Report</h3>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Copy this report for bug reports. No transcript text or API keys are included.</p>
+        <button class="btn btn-sm" onclick="copySystemReport()">Copy System Report</button>
+        <button class="btn btn-sm" onclick="alert('Log folder would open here.')">Open Log Folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Navigation
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => navigate(item.dataset.page));
+});
+
+function navigate(pageId) {
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelector(`[data-page="${pageId}"]`).classList.add('active');
+  document.getElementById(`page-${pageId}`).classList.add('active');
+  if (pageId === 'diagnostics') detectHardware();
+}
+
+// Preset selection
+document.querySelectorAll('.preset-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+  });
+});
+
+// File selection
+function handleFileSelect(input, displayId) {
+  if (input.files.length > 0) {
+    document.getElementById(displayId).textContent = input.files[0].name;
+  }
+}
+
+// Pipeline simulation (in a real app, this would call the Python backend)
+function startPipeline() {
+  document.getElementById('progress-container').style.display = 'block';
+  const log = document.getElementById('pipeline-log');
+  log.innerHTML = '';
+  const stages = [
+    {name: 'init', label: 'Initializing pipeline', pct: 5, msg: 'WORD-ALIGN v2.0.0-dev'},
+    {name: 'ensemble', label: 'Running ensemble transcription', pct: 15, msg: 'Running WhisperX (high accuracy mode)'},
+    {name: 'ensemble', label: 'Running ensemble transcription', pct: 35, msg: 'Running Qwen3-ASR (ensemble voter)'},
+    {name: 'ensemble', label: 'Running ensemble transcription', pct: 50, msg: 'Running Vosk (parallel mode)'},
+    {name: 'consensus', label: 'Building consensus', pct: 55, msg: 'Backbone: whisperx. 3 backbone corrections.'},
+    {name: 'waterfall', label: 'Timing waterfall', pct: 60, msg: 'Vosk: matched 94.2% of words'},
+    {name: 'waterfall', label: 'Timing waterfall', pct: 70, msg: 'MFA: 12 words force-aligned in 3 gaps'},
+    {name: 'interpolation', label: 'Interpolating remaining timestamps', pct: 75, msg: 'Interpolated 4 words'},
+    {name: 'segmentation', label: 'Segmenting subtitles', pct: 85, msg: 'Iterative merging: 4 final segments'},
+    {name: 'qa', label: 'Running Smart QA', pct: 92, msg: '3 issues detected (1 high, 2 medium)'},
+    {name: 'export', label: 'Writing output files', pct: 100, msg: 'COMPLETE: 247 words, 4 segments'},
+  ];
+  let i = 0;
+  function next() {
+    if (i >= stages.length) return;
+    const s = stages[i];
+    document.getElementById('progress-fill').style.width = s.pct + '%';
+    document.getElementById('progress-stage').textContent = s.label;
+    document.getElementById('progress-pct').textContent = s.pct + '%';
+    const cls = s.msg.includes('COMPLETE') ? 'ok' : 'info';
+    log.innerHTML += `<div class="${cls}">[${s.name}] ${s.msg}</div>\n`;
+    log.scrollTop = log.scrollHeight;
+    i++;
+    if (s.pct < 100) setTimeout(next, 800);
+  }
+  next();
+}
+
+function cancelPipeline() {
+  document.getElementById('progress-stage').textContent = 'Cancelled';
+  document.getElementById('pipeline-log').innerHTML += '<div class="error">[cancelled] Pipeline stopped by user.</div>\n';
+}
+
+// Hardware detection (client-side, approximate)
+function detectHardware() {
+  const nav = navigator;
+  document.getElementById('hw-os').textContent = nav.platform || 'Unknown';
+  document.getElementById('hw-cpu').textContent = (nav.hardwareConcurrency || '?') + ' cores';
+  const mem = (nav.deviceMemory || '?') + ' GB';
+  document.getElementById('hw-ram').textContent = mem;
+  // GPU detection via WebGL
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (gl) {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'GPU detected';
+      document.getElementById('hw-gpu').textContent = renderer.substring(0, 40);
+      document.getElementById('hw-gpu').className = 'value ok';
+    } else {
+      document.getElementById('hw-gpu').textContent = 'Not detected';
+      document.getElementById('hw-gpu').className = 'value warn';
+    }
+  } catch(e) {
+    document.getElementById('hw-gpu').textContent = 'Not available';
+  }
+  document.getElementById('hw-vram').textContent = '— (requires backend)';
+  document.getElementById('hw-cuda').textContent = '— (requires backend)';
+  document.getElementById('hw-ffmpeg').textContent = '— (requires backend)';
+  document.getElementById('hw-disk').textContent = '— (requires backend)';
+}
+
+function copySystemReport() {
+  const report = `WordAlign System Report
+========================
+Version: 2.0.0-dev
+OS: ${navigator.platform}
+CPU: ${navigator.hardwareConcurrency || '?'} cores
+RAM: ${navigator.deviceMemory || '?'} GB
+User Agent: ${navigator.userAgent}
+`;
+  navigator.clipboard.writeText(report).then(() => {
+    alert('System report copied to clipboard.');
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Normalize line endings: LF in the repository, native in the working copy.
+# Without this, files committed from Windows can reach Linux/macOS
+# contributors with CRLF endings and show up as whole-file diffs.
+* text=auto
+
+# Explicitly text, regardless of content sniffing.
+*.py    text
+*.md    text
+*.txt   text
+*.cfg   text
+*.toml  text
+*.yml   text
+*.yaml  text
+
+# Explicitly binary — never munge these.
+*.png   binary
+*.jpg   binary
+*.wav   binary
+*.mp3   binary
+*.mp4   binary
+*.zip   binary
