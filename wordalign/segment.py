@@ -31,6 +31,7 @@ from .utils import (count_visible_characters,
 _max_cpl = MAX_CPL                    # characters per line
 _max_lines = 2                        # lines per cue
 _max_duration_ms = MAX_DURATION_MS    # max on-screen duration per cue
+_min_cue_ms = 700                     # minimum on-screen duration per cue
 
 # Second-attempt ratio for the balancer: prefer a slightly uneven split over
 # leaving a line too long, but never force an outright ugly break.
@@ -47,6 +48,32 @@ def set_layout(max_cpl: Optional[int] = None, max_lines: Optional[int] = None,
         _max_lines = int(max_lines)
     if max_duration_ms is not None:
         _max_duration_ms = int(max_duration_ms)
+
+
+def set_config(config) -> None:
+    """Set segmentation parameters from a SegmentationConfig dataclass.
+
+    This is the v2.0 entry point. It replaces multiple set_layout() calls
+    with a single config-driven setup, making multi-job operation safe.
+    """
+    global _max_cpl, _max_lines, _max_duration_ms, _min_cue_ms
+    _max_cpl = int(config.max_cpl)
+    _max_lines = int(config.max_lines)
+    _max_duration_ms = int(config.max_duration_ms)
+    _min_cue_ms = int(config.min_cue_ms)
+
+
+def get_config() -> dict:
+    """Return current segmentation parameters as a dict.
+
+    Useful for testing and for saving job state.
+    """
+    return {
+        "max_cpl": _max_cpl,
+        "max_lines": _max_lines,
+        "max_duration_ms": _max_duration_ms,
+        "min_cue_ms": _min_cue_ms,
+    }
 
 
 def _cue_char_budget() -> int:
@@ -473,7 +500,7 @@ MIN_CUE_MS = 700
 
 
 def enforce_min_duration(segments: List[Dict],
-                         min_ms: int = MIN_CUE_MS) -> List[Dict]:
+                         min_ms: int = None) -> List[Dict]:
     """Guarantee a readable minimum duration for every cue.
 
     Two passes: first extend a too-short cue's END into the free gap before the
@@ -481,6 +508,8 @@ def enforce_min_duration(segments: List[Dict],
     degenerate (crammed with no room) into the previous cue, folding its text in
     and re-balancing. The word-level SRT is untouched.
     """
+    if min_ms is None:
+        min_ms = _min_cue_ms
     if not segments:
         return segments
 

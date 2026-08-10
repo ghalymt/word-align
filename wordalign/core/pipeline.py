@@ -26,7 +26,7 @@ from ..ensemble import (build_consensus, consensus_to_structured_text)
 from ..segment import (enforce_min_duration,
                        parse_human_transcript_to_srt_segments,
                        resolve_overlaps, run_iterative_merging,
-                       set_layout, validate_srt_output)
+                       set_config, set_layout, validate_srt_output)
 from ..utils import (detect_language, extract_tags_from_transcript,
                      normalize_word, strip_tags, time_to_ms)
 from .config import JobContext, PipelineProfile, SegmentationConfig
@@ -235,6 +235,7 @@ class PipelineRunner:
         self._emit(StageStarted(stage="segmentation",
                                 message=f"CPL={seg_cfg.max_cpl}, lines={seg_cfg.max_lines}"))
         t0 = time.time()
+        set_config(seg_cfg)
         set_layout(seg_cfg.max_cpl, seg_cfg.max_lines, seg_cfg.max_duration_ms)
         initial_segments = parse_human_transcript_to_srt_segments(
             original_text, aligned_words)

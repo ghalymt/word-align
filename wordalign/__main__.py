@@ -9,7 +9,12 @@ it, the guard is False in the children and only the parent runs ``main()``.
 """
 import sys
 
-from .cli import main
+# Prefer the thin v2 CLI (delegates to PipelineRunner with PrintSink).
+# Fall back to the original CLI if v2 has an import error.
+try:
+    from .cli_v2 import main
+except Exception:
+    from .cli import main
 
 if __name__ == "__main__":
     sys.exit(main())

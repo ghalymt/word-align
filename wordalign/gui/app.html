@@ -649,18 +649,161 @@ function detectHardware() {
 }
 
 function copySystemReport() {
-  const report = `WordAlign System Report
-========================
-Version: 2.0.0-dev
-OS: ${navigator.platform}
-CPU: ${navigator.hardwareConcurrency || '?'} cores
-RAM: ${navigator.deviceMemory || '?'} GB
-User Agent: ${navigator.userAgent}
-`;
+  const report = `WordAlign System Report\n========================\nVersion: 2.0.0\nOS: ${navigator.platform}\nCPU: ${navigator.hardwareConcurrency || '?'} cores\nRAM: ${navigator.deviceMemory || '?'} GB\nUser Agent: ${navigator.userAgent}\n`;
   navigator.clipboard.writeText(report).then(() => {
     alert('System report copied to clipboard.');
   });
 }
+
+// ===== API Backend Connection =====
+const API_BASE = 'http://127.0.0.1:5575/api';
+let backendOnline = false;
+
+async function apiGet(path) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch(e) { return null; }
+}
+
+async function apiPost(path, body) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch(e) { return null; }
+}
+
+async function checkBackend() {
+  const data = await apiGet('/health');
+  backendOnline = data && data.status === 'ok';
+  const statusEl = document.querySelector('.sidebar-footer');
+  if (statusEl) {
+    statusEl.innerHTML = backendOnline
+      ? '<span style="color: var(--success);">● Backend connected</span><br>WordAlign 2.0'
+      : '<span style="color: var(--warning);">● Backend offline</span><br>Run: python -m wordalign.gui.server';
+  }
+  if (backendOnline) {
+    loadHardwareInfo();
+    loadEngines();
+    loadModels();
+    loadProjects();
+  }
+}
+
+async function loadHardwareInfo() {
+  const data = await apiGet('/hardware');
+  if (!data) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set('hw-os', data.os || '—');
+  set('hw-cpu', data.cpu_count ? `${data.cpu_count} cores` : '—');
+  set('hw-ram', data.ram_gb > 0 ? `${data.ram_gb.toFixed(1)} GB` : '—');
+  set('hw-gpu', data.gpu || 'None');
+  set('hw-vram', data.gpu_vram_gb > 0 ? `${data.gpu_vram_gb.toFixed(1)} GB` : '—');
+  set('hw-cuda', data.cuda_available ? 'Yes' : 'No');
+  set('hw-ffmpeg', data.ffmpeg_available ? 'Yes' : 'No');
+}
+
+async function loadEngines() {
+  const data = await apiGet('/engines');
+  if (!data || !data.engines) return;
+  const container = document.getElementById('engines-list');
+  if (!container) return;
+  container.innerHTML = data.engines.map(e => `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <strong>${e.name}</strong> <span style="color:var(--text-muted);font-size:12px;">v${e.version}</span>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+            ${e.capabilities.join(' · ')} | ${e.runtime_type} | ${(e.languages||[]).join(', ')}
+          </div>
+        </div>
+        <span style="font-size:12px;padding:4px 8px;border-radius:4px;background:${e.ready?'var(--success-bg)':'var(--danger-bg)'};color:${e.ready?'var(--success)':'var(--danger)'};">
+          ${e.ready ? 'Ready' : 'Not Ready'}
+        </span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadModels() {
+  const data = await apiGet('/models');
+  if (!data || !data.models) return;
+  const container = document.getElementById('models-list');
+  if (!container) return;
+  container.innerHTML = data.models.map(m => `
+    <div class="card">
+      <strong>${m.name}</strong> <span style="color:var(--text-muted);font-size:12px;">${m.id}</span>
+      <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+        ${m.plugin_id} | ${(m.languages||[]).join(', ')} | ${m.size_gb ? m.size_gb+' GB' : '—'}
+        ${m.recommended ? '<span style="color:var(--success);">★ Recommended</span>' : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadProjects() {
+  const data = await apiGet('/projects');
+  if (!data || !data.projects) return;
+  const container = document.getElementById('projects-list');
+  if (!container) return;
+  if (data.projects.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:20px;">No projects yet. Use the Home page to start one.</p>';
+    return;
+  }
+  container.innerHTML = data.projects.map(p => `
+    <div class="card" style="cursor:pointer;" onclick="showProject('${p.id}')">
+      <strong>${p.name}</strong>
+      <div style="font-size:12px;color:var(--text-secondary);">${p.mode} · ${p.language||'auto'} · ${new Date(p.created_at*1000).toLocaleDateString()}</div>
+    </div>
+  `).join('');
+}
+
+async function startRun() {
+  const audioPath = document.getElementById('run-audio-path')?.value;
+  if (!audioPath) { alert('Please specify an audio file path.'); return; }
+  const transcriptPath = document.getElementById('run-transcript-path')?.value;
+  const language = document.getElementById('run-language')?.value || 'en';
+  const body = { audio_path: audioPath, language };
+  if (transcriptPath) body.transcript_path = transcriptPath;
+  const result = await apiPost('/run', body);
+  if (result && result.job_id) {
+    alert(`Pipeline started. Job ID: ${result.job_id}`);
+    pollJobStatus(result.job_id);
+  } else {
+    alert('Failed to start pipeline. Is the backend running?');
+  }
+}
+
+async function pollJobStatus(jobId) {
+  const interval = setInterval(async () => {
+    const data = await apiGet(`/job/${jobId}`);
+    if (!data || !data.job) return;
+    const job = data.job;
+    const statusEl = document.getElementById('run-status');
+    if (statusEl) {
+      statusEl.innerHTML = `<div class="card">Status: <strong>${job.status}</strong><br>Words: ${job.word_count||0} | Segments: ${job.segment_count||0}${job.error?'<br>Error: '+job.error:''}</div>`;
+    }
+    if (job.status === 'completed' || job.status === 'failed') {
+      clearInterval(interval);
+      if (job.status === 'completed' && job.output_files) {
+        const filesEl = document.getElementById('run-output');
+        if (filesEl) {
+          filesEl.innerHTML = '<h3>Output Files</h3>' + job.output_files.map(f => `<div class="card"><code>${f}</code></div>`).join('');
+        }
+      }
+    }
+  }, 2000);
+}
+
+// Check backend on load and periodically
+checkBackend();
+setInterval(checkBackend, 30000);
 </script>
 </body>
 </html>
