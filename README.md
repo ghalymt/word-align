@@ -129,6 +129,32 @@ environment variables, and `--qwen-chunk-seconds` bounds VRAM on long files.
 
 Because most of those pieces are optional and several are heavy, there is a
 preflight check that tells you exactly what is present, what is missing, and
+
+**Smart punctuation (recommended for readable subtitles).** Speech engines
+(Vosk especially) output lowercase text with no punctuation. Enable the
+restoration stage with `--punctuation`; it uses a local llama.cpp model when
+configured (with optional MTP draft for speed) and falls back to automatic
+rules otherwise:
+
+```bash
+python -m wordalign interview.mp4 -t interview.txt --punctuation \
+    --llm-engine D:/llama.cpp \
+    --llm-model F:/models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf \
+    --llm-mtp-model F:/models/mtp-gemma-4-12B-it.gguf   # enables MTP
+```
+
+| Setting | CLI flag | Environment variable |
+|---------|----------|----------------------|
+| llama.cpp dir/exe | `--llm-engine` | `WORDALIGN_LLM_ENGINE` |
+| Main GGUF model | `--llm-model` | `WORDALIGN_LLM_MODEL` |
+| MTP draft GGUF | `--llm-mtp-model` | `WORDALIGN_LLM_MTP_MODEL` |
+| Disable MTP | `--no-mtp` | — |
+
+The restorer capitalizes, adds punctuation, and wraps cues to the configured
+CPL without changing the words, so timestamps stay in sync.
+
+Because most of those pieces are optional and several are heavy, there is a
+preflight check that tells you exactly what is present, what is missing, and
 which of the two categories it falls into:
 
 ```bash

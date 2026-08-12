@@ -232,6 +232,15 @@ class PipelineConfig:
     qwen_chunk_seconds: float = 60.0
     qwen_asr_model: str = "Qwen/Qwen3-ASR-1.7B"
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
+    # Smart punctuation/capitalization via a local LLM (llama.cpp)
+    punctuation: bool = False                  # enable restoration stage
+    llm_engine: Optional[str] = field(
+        default_factory=lambda: os.environ.get("WORDALIGN_LLM_ENGINE"))
+    llm_model: Optional[str] = field(
+        default_factory=lambda: os.environ.get("WORDALIGN_LLM_MODEL"))
+    llm_mtp_model: Optional[str] = field(
+        default_factory=lambda: os.environ.get("WORDALIGN_LLM_MTP_MODEL"))
+    llm_mtp: bool = True                       # multi-token prediction draft
 
     def vosk_model_path(self, language: str) -> Optional[str]:
         if not self.vosk_models_dir:

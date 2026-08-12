@@ -94,6 +94,20 @@ def _parse_args(argv=None) -> PipelineConfig:
                    help="minimum on-screen duration per cue, ms (default 700)")
     p.add_argument("--profile", default=None,
                    help="pipeline profile name (fast, balanced, maximum_quality, cpu_only)")
+    p.add_argument("--punctuation", action="store_true",
+                   help="restore punctuation & capitalization on subtitle cues "
+                        "(uses local LLM if configured, rules otherwise)")
+    p.add_argument("--llm-engine",
+                   help="path to llama.cpp dir or llama-cli.exe "
+                        "(or set WORDALIGN_LLM_ENGINE)")
+    p.add_argument("--llm-model",
+                   help="path to the main GGUF model "
+                        "(or set WORDALIGN_LLM_MODEL)")
+    p.add_argument("--llm-mtp-model",
+                   help="path to the MTP draft GGUF (enables multi-token prediction) "
+                        "(or set WORDALIGN_LLM_MTP_MODEL)")
+    p.add_argument("--no-mtp", action="store_true",
+                   help="disable multi-token prediction draft model")
     p.add_argument("--gui", action="store_true",
                    help="start the GUI backend server instead of running CLI")
     p.add_argument("--port", type=int, default=5575,
@@ -139,6 +153,11 @@ def _parse_args(argv=None) -> PipelineConfig:
         max_lines=a.max_lines,
         max_duration_ms=a.max_duration_ms,
         min_cue_ms=a.min_cue_ms,
+        punctuation=a.punctuation,
+        llm_engine=a.llm_engine or os.environ.get("WORDALIGN_LLM_ENGINE"),
+        llm_model=a.llm_model or os.environ.get("WORDALIGN_LLM_MODEL"),
+        llm_mtp_model=a.llm_mtp_model or os.environ.get("WORDALIGN_LLM_MTP_MODEL"),
+        llm_mtp=not a.no_mtp,
     )
 
 

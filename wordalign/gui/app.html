@@ -169,6 +169,29 @@ input[type=file]{display:none}
     </div>
 
     <div class="card">
+      <h3>Smart Punctuation <span style="font-weight:400;color:var(--t3);font-size:11px">(AI fix for lowercase/no-punctuation output)</span></h3>
+      <div class="engine-row" style="margin-bottom:10px">
+        <div>
+          <div class="en">Use local AI model to add punctuation & capitalization</div>
+          <div class="em">Requires llama.cpp + a GGUF model. Falls back to automatic rules if not configured.</div>
+        </div>
+        <label class="tgl"><input type="checkbox" id="punctuation-on"><span class="s"></span></label>
+      </div>
+      <div class="form-group">
+        <label>llama.cpp folder (or llama-cli.exe path)</label>
+        <input type="text" id="llm-engine" placeholder="e.g. D:\llama.cpp">
+      </div>
+      <div class="form-group">
+        <label>Main model (.gguf)</label>
+        <input type="text" id="llm-model" placeholder="e.g. F:\models\gemma-4-12B-it.gguf">
+      </div>
+      <div class="form-group">
+        <label>MTP draft model (.gguf) — enables multi-token prediction</label>
+        <input type="text" id="llm-mtp-model" placeholder="e.g. F:\models\mtp-gemma-4-12B-it.gguf">
+      </div>
+    </div>
+
+    <div class="card">
       <h3>Model Paths <span style="font-weight:400;color:var(--t3);font-size:11px">(optional — auto-detected if left empty)</span></h3>
       <div class="form-group">
         <label>Vosk models folder</label>
@@ -392,6 +415,10 @@ async function startPipeline() {
       qwen_models_dir: document.getElementById('qwen-models').value || null,
       mfa_models_dir: document.getElementById('mfa-models').value || null,
     },
+    punctuation: document.getElementById('punctuation-on').checked,
+    llm_engine: document.getElementById('llm-engine').value || null,
+    llm_model: document.getElementById('llm-model').value || null,
+    llm_mtp_model: document.getElementById('llm-mtp-model').value || null,
   };
   // Backward compat: single vosk path field too
   body.vosk_models_dir = body.model_paths.vosk_models_dir;

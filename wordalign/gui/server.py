@@ -382,6 +382,10 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 max_cpl=int(params.get("max_cpl", 42)),
                 max_lines=int(params.get("max_lines", 2)),
                 use_tags=params.get("use_tags", False),
+                punctuation=params.get("punctuation", False),
+                llm_engine=params.get("llm_engine") or os.environ.get("WORDALIGN_LLM_ENGINE"),
+                llm_model=params.get("llm_model") or os.environ.get("WORDALIGN_LLM_MODEL"),
+                llm_mtp_model=params.get("llm_mtp_model") or os.environ.get("WORDALIGN_LLM_MTP_MODEL"),
             )
             runner = PipelineRunner(cfg, sink=sink)
             result = runner.run()

@@ -248,6 +248,18 @@ class PipelineRunner:
                                    duration_seconds=time.time() - t0))
         self._check_cancel("segmentation")
 
+        # --- Smart punctuation / capitalization ---
+        if cfg.punctuation:
+            self._emit(StageStarted(stage="punctuation",
+                                    message="Restoring punctuation & capitalization"))
+            t0 = time.time()
+            from ..qa.punctuation import create_restorer, restore_segments
+            restorer = create_restorer(cfg)
+            segments = restore_segments(segments, restorer)
+            self._emit(StageCompleted(stage="punctuation",
+                                       duration_seconds=time.time() - t0))
+            self._check_cancel("punctuation")
+
         # --- Outputs ---
         base = cfg.resolve_output_base()
 
