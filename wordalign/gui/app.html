@@ -169,15 +169,31 @@ input[type=file]{display:none}
     </div>
 
     <div class="card">
-      <h3>Model Paths</h3>
+      <h3>Model Paths <span style="font-weight:400;color:var(--t3);font-size:11px">(optional — auto-detected if left empty)</span></h3>
       <div class="form-group">
         <label>Vosk models folder</label>
-        <input type="text" id="vosk-models" placeholder="e.g. C:\vosk-models or leave auto-detected">
-        <p style="font-size:10px;color:var(--t3);margin-top:2px">If you already downloaded Vosk models, paste the folder path here.</p>
+        <input type="text" id="vosk-models" placeholder="e.g. C:\vosk-models">
+        <p style="font-size:10px;color:var(--t3);margin-top:2px">Unpacked Vosk models (vosk-model-en-us-0.22, ...)</p>
       </div>
       <div class="form-group">
-        <label>HuggingFace cache (auto-detected)</label>
-        <input type="text" disabled placeholder="Automatically found — no config needed">
+        <label>Whisper models folder</label>
+        <input type="text" id="whisper-models" placeholder="e.g. D:\models\whisper">
+        <p style="font-size:10px;color:var(--t3);margin-top:2px">Where your Whisper/faster-whisper .pt files live</p>
+      </div>
+      <div class="form-group">
+        <label>HuggingFace cache folder</label>
+        <input type="text" id="hf-cache" placeholder="e.g. D:\models\huggingface">
+        <p style="font-size:10px;color:var(--t3);margin-top:2px">Used by WhisperX, Qwen, and any HF-hosted model</p>
+      </div>
+      <div class="form-group">
+        <label>Qwen models folder</label>
+        <input type="text" id="qwen-models" placeholder="e.g. D:\models\qwen">
+        <p style="font-size:10px;color:var(--t3);margin-top:2px">Qwen3-ASR / ForcedAligner models (HF cache format)</p>
+      </div>
+      <div class="form-group">
+        <label>MFA models folder</label>
+        <input type="text" id="mfa-models" placeholder="e.g. D:\models\mfa">
+        <p style="font-size:10px;color:var(--t3);margin-top:2px">Montreal Forced Aligner acoustic models & dictionaries</p>
       </div>
     </div>
   </div>
@@ -258,7 +274,26 @@ async function checkBackend() {
   const el = document.getElementById('backend-status');
   el.textContent = backend ? '● Connected' : '● Backend Offline';
   el.className = 'status ' + (backend ? 'status-on' : 'status-off');
-  if (backend) { loadEngines(); checkPreflight(); }
+  if (backend) { loadEngines(); checkPreflight(); loadModelPaths(); }
+}
+
+async function loadModelPaths() {
+  const data = await get('/model-paths');
+  if (!data) return;
+  const map = {
+    'vosk-models': data.vosk_models_dir,
+    'whisper-models': data.whisper_models_dir,
+    'hf-cache': data.huggingface_cache_dir,
+    'qwen-models': data.qwen_models_dir,
+    'mfa-models': data.mfa_models_dir,
+  };
+  for (const [id, val] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el && val && !el.value) {
+      el.value = val;
+      el.placeholder = '';
+    }
+  }
 }
 
 async function loadEngines() {
@@ -350,8 +385,16 @@ async function startPipeline() {
     language: document.getElementById('language').value || null,
     max_cpl: parseInt(document.getElementById('max-cpl').value),
     use_vosk: true, use_mfa: false,
-    vosk_models_dir: document.getElementById('vosk-models').value || null,
+    model_paths: {
+      vosk_models_dir: document.getElementById('vosk-models').value || null,
+      whisper_models_dir: document.getElementById('whisper-models').value || null,
+      huggingface_cache_dir: document.getElementById('hf-cache').value || null,
+      qwen_models_dir: document.getElementById('qwen-models').value || null,
+      mfa_models_dir: document.getElementById('mfa-models').value || null,
+    },
   };
+  // Backward compat: single vosk path field too
+  body.vosk_models_dir = body.model_paths.vosk_models_dir;
 
   const result = await (async () => {
     try {

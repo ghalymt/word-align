@@ -88,6 +88,31 @@ either put `mfa` on PATH or point `WORDALIGN_MFA` at the executable or its
 conda env. Vosk models go in any directory, referenced via `--vosk-models` or
 `WORDALIGN_VOSK_MODELS`.
 
+**All model paths are configurable.** Every ASR model directory can be set
+per-model via CLI flags or environment variables. Leave any unset — WordAlign
+auto-detects them from standard cache locations (`~/.cache/whisper`,
+`~/.cache/vosk`, HuggingFace hub cache, etc.):
+
+| Model | CLI flag | Environment variable | Auto-detect location |
+|-------|----------|---------------------|----------------------|
+| Vosk | `--vosk-models` | `WORDALIGN_VOSK_MODELS` | `~/.cache/vosk` |
+| Whisper / faster-whisper | `--whisper-models` | `WORDALIGN_WHISPER_MODELS` | `~/.cache/whisper` |
+| Qwen ASR / aligner | `--qwen-models` | `WORDALIGN_QWEN_MODELS` | HF cache (`models--Qwen--*`) |
+| HuggingFace cache | `--hf-cache` | `WORDALIGN_HF_CACHE` | `HF_HOME` / `~/.cache/huggingface` |
+| MFA acoustic models | `--mfa-models` | `WORDALIGN_MFA_MODELS` | `~/Documents/MFA` |
+
+```bash
+# Example: models spread across several custom drives
+python -m wordalign interview.mp4 -t interview.txt \
+    --vosk-models D:/models/vosk \
+    --whisper-models D:/models/whisper \
+    --hf-cache E:/models/huggingface
+```
+
+New engines can register their own model type in
+`wordalign/models/paths.py` — the CLI, GUI, and auto-detection pick it up
+without further changes.
+
 **Qwen voter (ensemble mode).** Qwen3-ASR ships its own torch, which usually
 differs from the WhisperX stack's, so word-align calls it out-of-process. Point
 it at the virtualenv that has [`qwen-asr`](https://pypi.org/project/qwen-asr/)

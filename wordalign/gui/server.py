@@ -118,6 +118,11 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._send_json({"status": "ok", "version": "2.0"})
 
+        elif path == "/api/model-paths":
+            from ..models.paths import ModelPaths
+            mp = ModelPaths.auto_detect()
+            self._send_json(mp.to_dict())
+
         elif path == "/api/hardware":
             from ..runtimes.detector import HardwareDetector
             detector = HardwareDetector()
@@ -351,11 +356,27 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             # Use uploaded file paths from temp dir
             audio_path = params.get("audio_temp_path", params.get("audio_path", ""))
             transcript_path = params.get("transcript_temp_path", params.get("transcript_path"))
+
+            # Model paths: GUI overrides → env vars → auto-detect
+            from ..models.paths import ModelPaths
+            mp_dict = params.get("model_paths") or {}
+            model_paths = ModelPaths(
+                vosk_models_dir=mp_dict.get("vosk_models_dir")
+                                or os.environ.get("WORDALIGN_VOSK_MODELS"),
+                whisper_models_dir=mp_dict.get("whisper_models_dir")
+                                   or os.environ.get("WORDALIGN_WHISPER_MODELS"),
+                qwen_models_dir=mp_dict.get("qwen_models_dir")
+                                or os.environ.get("WORDALIGN_QWEN_MODELS"),
+                huggingface_cache_dir=mp_dict.get("huggingface_cache_dir")
+                                      or os.environ.get("WORDALIGN_HF_CACHE"),
+                mfa_models_dir=mp_dict.get("mfa_models_dir")
+                               or os.environ.get("WORDALIGN_MFA_MODELS"),
+            )
             cfg = PipelineConfig(
                 audio_path=audio_path,
                 transcript_path=transcript_path,
                 language=params.get("language"),
-                vosk_models_dir=params.get("vosk_models_dir") or os.environ.get("WORDALIGN_VOSK_MODELS"),
+                model_paths=model_paths,
                 use_vosk=params.get("use_vosk", True),
                 use_mfa=params.get("use_mfa", False),
                 max_cpl=int(params.get("max_cpl", 42)),

@@ -43,9 +43,15 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--vosk-models",
                    help="directory of unpacked Vosk models "
                         "(or set WORDALIGN_VOSK_MODELS)")
-    p.add_argument("--mfa", dest="mfa_cmd",
-                   help="path to the mfa executable or its conda env "
-                        "(or set WORDALIGN_MFA)")
+    p.add_argument("--whisper-models",
+                   help="directory with Whisper/faster-whisper models "
+                        "(or set WORDALIGN_WHISPER_MODELS)")
+    p.add_argument("--hf-cache",
+                   help="HuggingFace cache directory "
+                        "(or set WORDALIGN_HF_CACHE)")
+    p.add_argument("--qwen-models",
+                   help="HuggingFace cache dir with the Qwen models "
+                        "(or set WORDALIGN_QWEN_MODELS)")
     p.add_argument("--no-vosk", action="store_true")
     p.add_argument("--no-mfa", action="store_true")
     p.add_argument("--tags", action="store_true",
@@ -56,9 +62,12 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--qwen-python",
                    help="python.exe of the venv holding qwen_asr "
                         "(or set WORDALIGN_QWEN_PYTHON)")
-    p.add_argument("--qwen-models",
-                   help="HuggingFace cache dir with the Qwen models "
-                        "(or set WORDALIGN_QWEN_MODELS)")
+    p.add_argument("--mfa", dest="mfa_cmd",
+                   help="path to the mfa executable or its conda env "
+                        "(or set WORDALIGN_MFA)")
+    p.add_argument("--mfa-models",
+                   help="MFA acoustic model / dictionary directory "
+                        "(or set WORDALIGN_MFA_MODELS)")
     p.add_argument("--qwen-chunk-seconds", type=float, default=60.0,
                    help="Qwen audio chunk length; lower it if the GPU OOMs")
     p.add_argument("--whisper-model", default="large-v3")
@@ -98,13 +107,22 @@ def _parse_args(argv=None) -> PipelineConfig:
         run_server(port=a.port)
         sys.exit(0)
 
+    from .models.paths import ModelPaths
+    model_paths = ModelPaths(
+        vosk_models_dir=a.vosk_models or os.environ.get("WORDALIGN_VOSK_MODELS"),
+        whisper_models_dir=a.whisper_models or os.environ.get("WORDALIGN_WHISPER_MODELS"),
+        qwen_models_dir=a.qwen_models or os.environ.get("WORDALIGN_QWEN_MODELS"),
+        huggingface_cache_dir=a.hf_cache or os.environ.get("WORDALIGN_HF_CACHE"),
+        mfa_models_dir=a.mfa_models or os.environ.get("WORDALIGN_MFA_MODELS"),
+    )
+
     return PipelineConfig(
         audio_path=a.audio,
         transcript_path=a.transcript,
         srt_path=a.srt_path,
         language=a.language,
         output_dir=a.output_dir,
-        vosk_models_dir=a.vosk_models or os.environ.get("WORDALIGN_VOSK_MODELS"),
+        model_paths=model_paths,
         mfa_cmd=a.mfa_cmd or os.environ.get("WORDALIGN_MFA"),
         use_vosk=not a.no_vosk,
         use_mfa=not a.no_mfa,
@@ -114,7 +132,6 @@ def _parse_args(argv=None) -> PipelineConfig:
         device=a.device,
         ensemble_engines=tuple(e.strip() for e in a.engines.split(",") if e.strip()),
         qwen_python=a.qwen_python or os.environ.get("WORDALIGN_QWEN_PYTHON"),
-        qwen_models_dir=a.qwen_models or os.environ.get("WORDALIGN_QWEN_MODELS"),
         qwen_chunk_seconds=a.qwen_chunk_seconds,
         doc_format=a.doc,
         doc_timestamps=not a.no_doc_timestamps,

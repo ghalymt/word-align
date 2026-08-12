@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .models.paths import ModelPaths
+
 # ---------------------------------------------------------------------------
 # Subtitle shaping rules (industry-standard captioning constraints)
 # ---------------------------------------------------------------------------
@@ -189,8 +191,24 @@ class PipelineConfig:
     srt_path: Optional[str] = None             # optional rough SRT as extra timing source
     language: Optional[str] = None             # None -> auto-detect
     output_dir: Optional[str] = None           # default: alongside the audio file
-    vosk_models_dir: Optional[str] = field(
-        default_factory=lambda: os.environ.get("WORDALIGN_VOSK_MODELS"))
+
+    # -- Model paths (unified, overridable) --
+    model_paths: ModelPaths = field(default_factory=ModelPaths)
+
+    # Backward-compatible shortcuts (delegate to model_paths)
+    @property
+    def vosk_models_dir(self) -> Optional[str]:
+        return self.model_paths.vosk_models_dir
+    @vosk_models_dir.setter
+    def vosk_models_dir(self, val: Optional[str]):
+        self.model_paths.vosk_models_dir = val
+
+    @property
+    def qwen_models_dir(self) -> Optional[str]:
+        return self.model_paths.qwen_models_dir
+    @qwen_models_dir.setter
+    def qwen_models_dir(self, val: Optional[str]):
+        self.model_paths.qwen_models_dir = val
     mfa_cmd: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_MFA"))
     use_vosk: bool = True
@@ -211,8 +229,6 @@ class PipelineConfig:
     # Qwen3-ASR voter (runs out-of-process in its own venv; see qwen_engine).
     qwen_python: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_QWEN_PYTHON"))
-    qwen_models_dir: Optional[str] = field(
-        default_factory=lambda: os.environ.get("WORDALIGN_QWEN_MODELS"))
     qwen_chunk_seconds: float = 60.0
     qwen_asr_model: str = "Qwen/Qwen3-ASR-1.7B"
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"

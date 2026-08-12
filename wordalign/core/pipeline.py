@@ -202,7 +202,8 @@ class PipelineRunner:
             t0 = time.time()
             from ..engines.whisperx_engine import run_whisperx
             wx_words, wx_events = run_whisperx(cfg.audio_path, language,
-                                               cfg.whisper_model, cfg.device)
+                                               cfg.whisper_model, cfg.device,
+                                               cfg.model_paths.whisper_models_dir)
             match_timestamps(aligned_words, wx_words, "WhisperX",
                              human_words_norm)
             del wx_words
@@ -347,7 +348,8 @@ class PipelineRunner:
         if "whisperx" in cfg.ensemble_engines:
             from ..engines.whisperx_engine import run_whisperx
             wx_words, wx_events = run_whisperx(cfg.audio_path, language,
-                                               cfg.whisper_model, cfg.device)
+                                               cfg.whisper_model, cfg.device,
+                                               cfg.model_paths.whisper_models_dir)
             if wx_words:
                 engine_words["whisperx"] = wx_words
         if "qwen" in cfg.ensemble_engines:

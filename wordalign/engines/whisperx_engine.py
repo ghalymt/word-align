@@ -41,12 +41,16 @@ _EVENT_RE = re.compile(r"\[(.*?)\]|\((.*?)\)")
 
 def run_whisperx(audio_path: str, language: str,
                  model_size: str = "large-v3",
-                 device: Optional[str] = None
+                 device: Optional[str] = None,
+                 models_dir: Optional[str] = None
                  ) -> Tuple[List[Dict], List[Dict]]:
     """Return ``(word_segments, audio_events)``.
 
     ``word_segments`` items carry ``word``/``start``/``end`` and, when
     WhisperX provides one, an alignment ``score`` (exposed as ``conf``).
+
+    If *models_dir* is provided, sets ``HF_HOME`` temporarily so whisperx
+    finds models in the custom directory.
     """
     print("\n" + "=" * 60 + "\nRUNNING WHISPERX (HIGH ACCURACY MODE)")
     import torch
@@ -58,6 +62,14 @@ def run_whisperx(audio_path: str, language: str,
     compute_type = "float16" if device == "cuda" else "int8"
     print(f"Device: {device} | compute: {compute_type} | model: {model_size} "
           f"| language: {language}")
+
+    # Allow custom model directory override
+    _prev_hf = None
+    if models_dir:
+        _prev_hf = os.environ.get("HF_HOME")
+        os.environ["HF_HOME"] = models_dir
+        print(f"Using custom model dir: {models_dir}")
+
     try:
         model = whisperx.load_model(model_size, device,
                                     compute_type=compute_type,
@@ -109,3 +121,6 @@ def run_whisperx(audio_path: str, language: str,
         import traceback
         traceback.print_exc()
         return [], []
+    finally:
+        if models_dir and _prev_hf is not None:
+            os.environ["HF_HOME"] = _prev_hf

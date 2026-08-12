@@ -47,6 +47,7 @@ class WhisperXAdapter(EnginePlugin):
             request.language or "en",
             request.options.get("model", "large-v3"),
             request.options.get("device"),
+            models_dir=request.options.get("models_dir"),
         )
         return {"words": words, "events": events,
                 "engine_id": "whisperx"}
