@@ -37,15 +37,64 @@ def _exe_in_env(env_root: Path) -> Optional[Path]:
     return None
 
 
+# MFA language model mapping. Maps ISO 639-1 codes to MFA model names.
+# English is the default; add more as you install MFA models.
+MFA_LANGUAGE_MAP = {
+    "en": {
+        "acoustic": "english_us_arpa",
+        "g2p": "english_us_arpa",
+        "dictionary": "english_us_arpa",
+    },
+    "ar": {
+        "acoustic": "arabic_mfa",
+        "g2p": "arabic_mfa",
+        "dictionary": "arabic_mfa",
+    },
+    "zh": {
+        "acoustic": "mandarin_chinese_mfa",
+        "g2p": "mandarin_chinese_pinyin_g2p",
+        "dictionary": "mandarin_chinese_mfa",
+    },
+    "fr": {
+        "acoustic": "french_mfa",
+        "g2p": "french_mfa",
+        "dictionary": "french_mfa",
+    },
+    "de": {
+        "acoustic": "german_mfa",
+        "g2p": "german_mfa",
+        "dictionary": "german_mfa",
+    },
+    "es": {
+        "acoustic": "spanish_mfa",
+        "g2p": "spanish_mfa",
+        "dictionary": "spanish_mfa",
+    },
+    "pt": {
+        "acoustic": "portuguese_brazil_mfa",
+        "g2p": "portuguese_brazil_mfa",
+        "dictionary": "portuguese_brazil_mfa",
+    },
+}
+
+
+def get_mfa_models(language: str = "en") -> dict:
+    """Get MFA acoustic, G2P, and dictionary model names for a language."""
+    return MFA_LANGUAGE_MAP.get(language, MFA_LANGUAGE_MAP["en"])
+
+
 class MFAWrapper:
     """Corpus prep, G2P dictionary extension, and alignment execution."""
 
-    def __init__(self, work_dir: str, mfa_cmd: Optional[str] = None):
+    def __init__(self, work_dir: str, mfa_cmd: Optional[str] = None,
+                 language: str = "en"):
         self.work_dir = Path(work_dir)
         self.corpus_dir = self.work_dir / "corpus"
         self.output_dir = self.work_dir / "mfa_output"
         self.env = os.environ.copy()
         self.mfa_exe = self._resolve_mfa(mfa_cmd)
+        self.language = language
+        self.mfa_models = get_mfa_models(language)
         self.corpus_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,7 +159,9 @@ class MFAWrapper:
         return str(candidate) if candidate.exists() else model_name
 
     def generate_custom_dictionary(self, words: Set[str],
-                                   model_name: str = "english_us_arpa") -> Path:
+                                   model_name: Optional[str] = None) -> Path:
+        if model_name is None:
+            model_name = self.mfa_models["g2p"]
         input_words_path = self.work_dir / "words.txt"
         output_dict_path = self.work_dir / "custom_dict.txt"
         input_words_path.write_text(
@@ -123,7 +174,9 @@ class MFAWrapper:
         return output_dict_path
 
     def run_alignment(self, dictionary_path: str,
-                      acoustic_model_name: str = "english_us_arpa") -> None:
+                      acoustic_model_name: Optional[str] = None) -> None:
+        if acoustic_model_name is None:
+            acoustic_model_name = self.mfa_models["acoustic"]
         cmd = [self.mfa_exe, "align", str(self.corpus_dir),
                str(dictionary_path),
                self._get_model_path("acoustic", acoustic_model_name),

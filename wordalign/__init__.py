@@ -5,4 +5,4 @@
 # ensemble mode fuses WhisperX + Qwen3-ASR + Vosk with a no-panic balancer,
 # isolated-tag protection, zero-overlap timing, and a minimum-duration guard.
 # 23 tests. See the git history for the 0.9.x -> 1.0.0 path.
-__version__ = "1.0.0"
+__version__ = "2.0.0"

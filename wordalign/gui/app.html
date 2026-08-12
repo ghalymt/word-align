@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WordAlign — Subtitle Creator</title>
+<style>
+:root {
+  --bg: #fafafa; --surface: #fff; --border: #e0e0e0;
+  --text: #1a1a1a; --t2: #666; --t3: #999;
+  --navy: #1a3a5c; --navy-l: #2d5a8a; --navy-bg: #e8eef4;
+  --green: #2d7a3d; --green-bg: #e6f3e8;
+  --amber: #b8860b; --amber-bg: #fdf6e3;
+  --red: #c44; --red-bg: #fce8e8;
+  --mono: 'SF Mono','Consolas',monospace; --sans: -apple-system,'Segoe UI',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px var(--sans);background:var(--bg);color:var(--text);line-height:1.5}
+header{background:var(--navy);color:#fff;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:16px;font-weight:600;letter-spacing:-.02em}
+header .status{font-size:11px;padding:3px 10px;border-radius:10px}
+.status-on{background:#fff3;color:#fff}
+.status-off{background:var(--red-bg);color:var(--red)}
+.container{max-width:780px;margin:0 auto;padding:32px 24px}
+.step{margin-bottom:28px}
+.step h2{font-size:15px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.step h2 .num{width:24px;height:24px;background:var(--navy);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.step p.desc{font-size:12px;color:var(--t2);margin-bottom:12px}
+.file-box{border:2px dashed var(--border);border-radius:8px;padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
+.file-box:hover,.file-box.dragover{border-color:var(--navy);background:var(--navy-bg)}
+.file-box .icon{font-size:32px;margin-bottom:6px}
+.file-box p{font-size:13px;color:var(--t2)}
+.file-box .name{margin-top:8px;font-weight:500;color:var(--navy)}
+.file-box small{font-size:11px;color:var(--t3)}
+input[type=file]{display:none}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.row{grid-template-columns:1fr}.container{padding:16px}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px}
+.card h3{font-size:13px;font-weight:600;margin-bottom:8px}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;font-size:12px;font-weight:500;margin-bottom:3px;color:var(--t2)}
+.form-group input,.form-group select{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:var(--sans)}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:var(--navy)}
+.preset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.preset-card{border:2px solid var(--border);border-radius:6px;padding:12px;cursor:pointer;text-align:center;transition:all .15s}
+.preset-card:hover{border-color:var(--navy)}
+.preset-card.selected{border-color:var(--navy);background:var(--navy-bg)}
+.preset-card .pl{font-weight:600;font-size:13px}
+.preset-card .pd{font-size:11px;color:var(--t3);margin-top:2px}
+.preset-card .ps{font-size:11px;color:var(--navy);margin-top:4px}
+.engine-list{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.engine-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border);border-radius:4px;background:var(--surface)}
+.engine-row .en{font-weight:500;font-size:13px}
+.engine-row .em{font-size:11px;color:var(--t2);margin-top:1px}
+.tgl{position:relative;width:36px;height:20px;flex-shrink:0}
+.tgl input{opacity:0;width:0;height:0}
+.tgl .s{position:absolute;top:0;left:0;right:0;bottom:0;background:var(--border);border-radius:10px;transition:.2s;cursor:pointer}
+.tgl .s:before{content:"";position:absolute;height:16px;width:16px;left:2px;bottom:2px;background:#fff;border-radius:50%;transition:.2s}
+.tgl input:checked+.s{background:var(--navy)}
+.tgl input:checked+.s:before{transform:translateX(16px)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:1px solid var(--border);border-radius:4px;background:var(--surface);font-size:13px;cursor:pointer;font-family:var(--sans);transition:all .15s}
+.btn:hover{border-color:var(--navy);color:var(--navy)}
+.btn-primary{background:var(--navy);color:#fff;border-color:var(--navy)}
+.btn-primary:hover{background:var(--navy-l);color:#fff}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-large{padding:12px 32px;font-size:15px}
+.btn-danger{color:var(--red);border-color:var(--red)}
+.progress{margin-top:20px;display:none}
+.progress-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:8px}
+.progress-fill{height:100%;background:var(--navy);border-radius:3px;transition:width .3s;width:0}
+.progress-info{display:flex;justify-content:space-between;font-size:12px;color:var(--t2)}
+.log{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-family:var(--mono);font-size:12px;max-height:280px;overflow-y:auto;line-height:1.7;margin-top:12px}
+.log .i{color:#6ab0f3}.log .w{color:#f0c674}.log .e{color:#e06c75}.log .ok{color:#98c379}
+.output-section{display:none;margin-top:20px}
+.output-section .files{display:flex;flex-wrap:wrap;gap:8px}
+.output-section .file{background:var(--navy-bg);padding:8px 14px;border-radius:4px;font-size:12px;color:var(--navy);font-family:var(--mono);word-break:break-all}
+.pref-ok{color:var(--green)}.pref-warn{color:var(--amber)}.pref-err{color:var(--red)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎬 WordAlign 2.0</h1>
+  <span id="backend-status" class="status status-off">● Backend Offline</span>
+</header>
+
+<div class="container">
+
+  <!-- STEP 1: Select files -->
+  <div class="step">
+    <h2><span class="num">1</span> Select Your Files</h2>
+
+    <div class="row">
+      <div class="file-box" id="audio-box" onclick="document.getElementById('audio-file').click()">
+        <div class="icon">🎵</div>
+        <p><strong>Audio or Video File</strong> <small>(required)</small></p>
+        <p>The recording you want to subtitle</p>
+        <div class="name" id="audio-name"></div>
+        <input type="file" id="audio-file" accept="audio/*,video/*,.mp4,.mkv,.mov,.avi,.mp3,.wav,.m4a,.flac,.ogg">
+      </div>
+      <div class="file-box" id="transcript-box" onclick="document.getElementById('transcript-file').click()">
+        <div class="icon">📄</div>
+        <p><strong>Transcript</strong> <small>(optional)</small></p>
+        <p>Your verbatim text for reference alignment</p>
+        <div class="name" id="transcript-name"></div>
+        <input type="file" id="transcript-file" accept=".txt,text/plain">
+      </div>
+    </div>
+
+    <p style="font-size:11px;color:var(--t3);margin-top:8px">
+      <strong>With transcript:</strong> time-align every word to the audio.<br>
+      <strong>Without transcript:</strong> engines vote on what was said — best with WhisperX + Qwen + Vosk.
+    </p>
+  </div>
+
+  <!-- STEP 2: Settings -->
+  <div class="step">
+    <h2><span class="num">2</span> Choose Settings</h2>
+
+    <div class="card">
+      <h3>Quality Preset</h3>
+      <div class="preset-grid" id="preset-grid">
+        <div class="preset-card selected" data-preset="cpu_only">
+          <div class="pl">CPU Only</div><div class="pd">Vosk only, no GPU</div><div class="ps">⚡ Fast · Any PC</div>
+        </div>
+        <div class="preset-card" data-preset="fast">
+          <div class="pl">Fast</div><div class="pd">Vosk + WhisperX</div><div class="ps">⚡⚡ Faster</div>
+        </div>
+        <div class="preset-card" data-preset="balanced">
+          <div class="pl">Balanced</div><div class="pd">All 3 engines</div><div class="ps">⚖ Recommended</div>
+        </div>
+        <div class="preset-card" data-preset="maximum_quality">
+          <div class="pl">Maximum Quality</div><div class="pd">Everything + QA</div><div class="ps">🐌 Slow · Best</div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:var(--t3);margin-top:8px"><strong>CPU Only</strong> works on any computer. <strong>Fast</strong> and <strong>Balanced</strong> need a GPU for best speed.</p>
+    </div>
+
+    <div class="card">
+      <h3>Subtitle Format</h3>
+      <div class="row">
+        <div class="form-group">
+          <label>Characters per line (CPL)</label>
+          <select id="max-cpl">
+            <option value="32">32 — vertical / social media</option>
+            <option value="42" selected>42 — standard video</option>
+            <option value="52">52 — wide / cinema</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Language</label>
+          <select id="language">
+            <option value="">Auto-detect</option>
+            <option value="en">English</option><option value="ar">Arabic</option>
+            <option value="zh">Chinese</option><option value="fr">French</option>
+            <option value="de">German</option><option value="es">Spanish</option>
+            <option value="it">Italian</option><option value="pt">Portuguese</option>
+            <option value="nl">Dutch</option><option value="ru">Russian</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="engines-card">
+      <h3>Engines</h3>
+      <div class="engine-list" id="engine-checklist"></div>
+      <p style="font-size:11px;color:var(--t3)">Green dot = ready to use. Yellow = not installed (will be skipped automatically).</p>
+    </div>
+
+    <div class="card">
+      <h3>Model Paths</h3>
+      <div class="form-group">
+        <label>Vosk models folder</label>
+        <input type="text" id="vosk-models" placeholder="e.g. C:\vosk-models or leave auto-detected">
+        <p style="font-size:10px;color:var(--t3);margin-top:2px">If you already downloaded Vosk models, paste the folder path here.</p>
+      </div>
+      <div class="form-group">
+        <label>HuggingFace cache (auto-detected)</label>
+        <input type="text" disabled placeholder="Automatically found — no config needed">
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3: Run -->
+  <div class="step" id="run-section">
+    <h2><span class="num">3</span> Run</h2>
+    <button class="btn btn-primary btn-large" id="run-btn" onclick="startPipeline()">
+      ▶ Create Subtitles
+    </button>
+    <span style="font-size:12px;color:var(--t3);margin-left:12px;" id="preflight-msg"></span>
+
+    <div class="progress" id="progress">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-info">
+        <span id="progress-stage">Starting...</span>
+        <span id="progress-pct">0%</span>
+      </div>
+      <div class="log" id="log"></div>
+      <button class="btn btn-danger" onclick="cancelPipeline()" style="margin-top:8px;">⏹ Cancel</button>
+    </div>
+
+    <div class="output-section" id="output-section">
+      <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">✅ Subtitle Files Created</h3>
+      <div class="files" id="output-files"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = 'http://127.0.0.1:5575/api';
+let backend = false;
+let running = false;
+let preset = 'cpu_only';
+
+// ==================== FILE HANDLING ====================
+['audio-file','transcript-file'].forEach(id => {
+  document.getElementById(id).addEventListener('change', e => {
+    const display = id === 'audio-file' ? 'audio-name' : 'transcript-name';
+    document.getElementById(display).textContent = e.target.files[0]?.name || '';
+  });
+});
+
+['audio-box','transcript-box'].forEach(id => {
+  const el = document.getElementById(id);
+  ['dragenter','dragover'].forEach(ev => el.addEventListener(ev, e => { e.preventDefault(); el.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(ev => el.addEventListener(ev, e => { e.preventDefault(); el.classList.remove('dragover'); }));
+  el.addEventListener('drop', e => {
+    const files = e.dataTransfer.files;
+    const inputId = id === 'audio-box' ? 'audio-file' : 'transcript-file';
+    const displayId = id === 'audio-box' ? 'audio-name' : 'transcript-name';
+    if (files.length) {
+      const dt = new DataTransfer(); dt.items.add(files[0]);
+      document.getElementById(inputId).files = dt.files;
+      document.getElementById(displayId).textContent = files[0].name;
+    }
+  });
+});
+
+// ==================== PRESETS ====================
+document.querySelectorAll('.preset-card').forEach(c => {
+  c.addEventListener('click', () => {
+    document.querySelectorAll('.preset-card').forEach(x => x.classList.remove('selected'));
+    c.classList.add('selected');
+    preset = c.dataset.preset;
+  });
+});
+
+// ==================== API ====================
+async function get(path) {
+  try { const r = await fetch(API+path); return r.ok ? r.json() : null; } catch(e) { return null; }
+}
+
+async function checkBackend() {
+  const data = await get('/health');
+  backend = data?.status === 'ok';
+  const el = document.getElementById('backend-status');
+  el.textContent = backend ? '● Connected' : '● Backend Offline';
+  el.className = 'status ' + (backend ? 'status-on' : 'status-off');
+  if (backend) { loadEngines(); checkPreflight(); }
+}
+
+async function loadEngines() {
+  const data = await get('/engines');
+  if (!data?.engines) return;
+  const container = document.getElementById('engine-checklist');
+  const names = {whisperx:'WhisperX',vosk:'Vosk',qwen_asr:'Qwen ASR',mfa:'MFA',yamnet:'YAMNet Audio Events'};
+  const descs = {whisperx:'GPU transcription · best accuracy',vosk:'CPU transcription · fast word timing',
+    qwen_asr:'GPU transcription · 30+ languages',mfa:'Forced alignment · surgical precision',
+    yamnet:'Sound event detection · [music] [laughs]'};
+  container.innerHTML = data.engines.map(e => `
+    <div class="engine-row">
+      <div><div class="en">${names[e.id]||e.name}</div><div class="em">${descs[e.id]||''}</div></div>
+      <span style="font-size:11px;margin-right:8px;color:${e.ready?'var(--green)':'var(--amber)'}">${e.ready?'✔ Ready':'⚠ Not installed'}</span>
+      <label class="tgl"><input type="checkbox" ${e.ready?'checked':''} onchange="updateRunBtn()"><span class="s"></span></label>
+    </div>
+  `).join('');
+  updateRunBtn();
+}
+
+async function checkPreflight() {
+  const data = await get('/hardware');
+  if (!data) return;
+  const msg = [];
+  if (data.ffmpeg_available) msg.push('FFmpeg ✔');
+  else msg.push('FFmpeg ✘');
+  if (data.cuda_available) msg.push('CUDA ✔');
+  else msg.push('GPU ✘ (CPU mode)');
+  document.getElementById('preflight-msg').textContent = msg.join(' · ');
+  updateRunBtn();
+}
+
+function updateRunBtn() {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = !backend || !document.getElementById('audio-file').files.length;
+  if (!backend) btn.textContent = 'Waiting for backend...';
+  else if (!document.getElementById('audio-file').files.length) btn.textContent = 'Select audio file first';
+  else btn.textContent = '▶ Create Subtitles';
+}
+
+document.getElementById('audio-file').addEventListener('change', updateRunBtn);
+
+// ==================== RUN PIPELINE ====================
+async function uploadFiles() {
+  const audio = document.getElementById('audio-file').files[0];
+  const transcript = document.getElementById('transcript-file').files[0];
+  if (!audio) return null;
+
+  const form = new FormData();
+  form.append('audio', audio);
+  if (transcript) form.append('transcript', transcript);
+
+  try {
+    const r = await fetch(API+'/upload', { method: 'POST', body: form });
+    if (!r.ok) return null;
+    const data = await r.json();
+    // Return mapping: first file = audio, second (if exists) = transcript
+    return { audio_temp: data.files?.[0], transcript_temp: data.files?.[1] || null };
+  } catch(e) { return null; }
+}
+
+async function startPipeline() {
+  if (!backend || running) return;
+  const audio = document.getElementById('audio-file').files[0];
+  if (!audio) { alert('Please select an audio/video file first.'); return; }
+
+  running = true;
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('progress').style.display = 'block';
+  document.getElementById('output-section').style.display = 'none';
+  const log = document.getElementById('log');
+  log.innerHTML = '<div class="i">Uploading files...</div>\n';
+  log.scrollTop = log.scrollHeight;
+
+  // Upload files to server first
+  const paths = await uploadFiles();
+  if (!paths?.audio_temp) {
+    log.innerHTML += '<div class="e">Upload failed. Check that the backend server is running.</div>\n';
+    running = false;
+    document.getElementById('run-btn').disabled = false;
+    return;
+  }
+  log.innerHTML += '<div class="ok">Files uploaded. Starting pipeline...</div>\n';
+  log.scrollTop = log.scrollHeight;
+
+  const body = {
+    audio_temp_path: paths.audio_temp,
+    transcript_temp_path: paths.transcript_temp,
+    language: document.getElementById('language').value || null,
+    max_cpl: parseInt(document.getElementById('max-cpl').value),
+    use_vosk: true, use_mfa: false,
+    vosk_models_dir: document.getElementById('vosk-models').value || null,
+  };
+
+  const result = await (async () => {
+    try {
+      const r = await fetch(API+'/run', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      return r.ok ? r.json() : null;
+    } catch(e) { return null; }
+  })();
+
+  if (!result?.job_id) {
+    log.innerHTML += '<div class="e">Failed to start pipeline.</div>\n';
+    running = false;
+    document.getElementById('run-btn').disabled = false;
+    return;
+  }
+
+  log.innerHTML += `<div class="i">Job started: ${result.job_id}</div>\n`;
+  const stages = {init:'Starting',ensemble:'Transcribing',vosk:'Vosk timing',waterfall:'Timing waterfall',
+    whisperx:'WhisperX timing',mfa:'MFA alignment',interpolation:'Interpolating',segmentation:'Segmenting',output:'Writing files'};
+  let lastStage = '';
+  let pct = 5;
+
+  const poll = setInterval(async () => {
+    const data = await get('/job/'+result.job_id);
+    if (!data?.job) return;
+    const job = data.job;
+    const stageName = data.stages?.length ? data.stages[data.stages.length-1].stage_name : 'running';
+    const displayName = stages[stageName] || stageName;
+
+    if (displayName !== lastStage) {
+      lastStage = displayName;
+      pct = Math.min(pct + 15, 95);
+      document.getElementById('progress-fill').style.width = pct+'%';
+      document.getElementById('progress-stage').textContent = displayName;
+      document.getElementById('progress-pct').textContent = pct+'%';
+      log.innerHTML += `<div class="i">[${displayName}] Processing...</div>\n`;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    if (job.status === 'completed') {
+      clearInterval(poll);
+      document.getElementById('progress-fill').style.width = '100%';
+      document.getElementById('progress-stage').textContent = 'Complete!';
+      document.getElementById('progress-pct').textContent = '100%';
+      log.innerHTML += `<div class="ok">DONE: ${job.word_count} words, ${job.segment_count} segments</div>\n`;
+      log.scrollTop = log.scrollHeight;
+      showOutput(job.output_files || []);
+      running = false;
+      document.getElementById('run-btn').disabled = false;
+    } else if (job.status === 'failed') {
+      clearInterval(poll);
+      log.innerHTML += `<div class="e">FAILED: ${job.error||'Unknown error'}</div>\n`;
+      log.scrollTop = log.scrollHeight;
+      running = false;
+      document.getElementById('run-btn').disabled = false;
+    }
+  }, 2000);
+}
+
+function cancelPipeline() {
+  if (!running) return;
+  fetch(API+'/run/cancel', {method:'POST'});
+  document.getElementById('log').innerHTML += '<div class="w">Cancelled by user.</div>\n';
+  running = false;
+  document.getElementById('run-btn').disabled = false;
+}
+
+function showOutput(files) {
+  if (!files?.length) return;
+  document.getElementById('output-section').style.display = 'block';
+  document.getElementById('output-files').innerHTML = files.map(f =>
+    `<div class="file">${f}</div>`
+  ).join('');
+}
+
+// Init
+checkBackend();
+setInterval(checkBackend, 10000);
+document.getElementById('vosk-models').addEventListener('input', updateRunBtn);
+</script>
+</body>
+</html>
