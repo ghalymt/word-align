@@ -64,6 +64,7 @@ class PipelineRunner:
 
     def _profile_from_config(self, cfg: PipelineConfig) -> PipelineProfile:
         """Derive a v2.0 profile from the v1.0 PipelineConfig."""
+        from .config import ExportConfig
         return PipelineProfile(
             segmentation=SegmentationConfig(
                 max_cpl=cfg.max_cpl,
@@ -71,12 +72,11 @@ class PipelineRunner:
                 max_duration_ms=cfg.max_duration_ms,
                 min_cue_ms=cfg.min_cue_ms,
             ),
-            export=type(self.profile.export)() if hasattr(self, 'profile')
-            else __import__('wordalign.core.config', fromlist=['ExportConfig']).ExportConfig(
+            export=ExportConfig(
                 transcript_format=cfg.doc_format,
                 transcript_timestamps=cfg.doc_timestamps,
                 tags=cfg.use_tags,
-            ) if False else None,
+            ),
         )
 
     def _emit(self, event: PipelineEvent) -> None:

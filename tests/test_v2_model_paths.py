@@ -112,6 +112,23 @@ class TestModelPaths(unittest.TestCase):
         self.assertEqual(d["custom_paths"], {"yamnet": "C:/yam"})
         self.assertIn("vosk_models_dir", d)
 
+    def test_pipeline_profile_export_not_none(self):
+        """Regression: PipelineRunner builds a profile with export config.
+
+        Previously _profile_from_config had a broken expression that always
+        set export=None, crashing the pipeline at the export stage.
+        """
+        from wordalign.config import PipelineConfig
+        from wordalign.core.pipeline import PipelineRunner
+        cfg = PipelineConfig("test.mp4")
+        runner = PipelineRunner(cfg)
+        self.assertIsNotNone(runner.profile)
+        self.assertIsNotNone(runner.profile.export)
+        self.assertTrue(runner.profile.export.word_srt)
+        self.assertTrue(runner.profile.export.sentence_srt)
+        self.assertEqual(runner.profile.export.transcript_format, "txt")
+        self.assertEqual(runner.profile.segmentation.max_cpl, 42)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -53,24 +53,24 @@ def run_whisperx(audio_path: str, language: str,
     finds models in the custom directory.
     """
     print("\n" + "=" * 60 + "\nRUNNING WHISPERX (HIGH ACCURACY MODE)")
-    import torch
-    import whisperx
-
-    gc.collect()
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
-    print(f"Device: {device} | compute: {compute_type} | model: {model_size} "
-          f"| language: {language}")
-
-    # Allow custom model directory override
-    _prev_hf = None
-    if models_dir:
-        _prev_hf = os.environ.get("HF_HOME")
-        os.environ["HF_HOME"] = models_dir
-        print(f"Using custom model dir: {models_dir}")
-
     try:
+        import torch
+        import whisperx
+
+        gc.collect()
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute_type = "float16" if device == "cuda" else "int8"
+        print(f"Device: {device} | compute: {compute_type} | model: {model_size} "
+              f"| language: {language}")
+
+        # Allow custom model directory override
+        _prev_hf = None
+        if models_dir:
+            _prev_hf = os.environ.get("HF_HOME")
+            os.environ["HF_HOME"] = models_dir
+            print(f"Using custom model dir: {models_dir}")
+
         model = whisperx.load_model(model_size, device,
                                     compute_type=compute_type,
                                     language=language)
