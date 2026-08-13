@@ -1,310 +1,247 @@
-# word-align
+# WordAlign 2.0
 
-**Word-accurate subtitle timing from any transcript + audio — or from audio alone.**
+**Speech-to-subtitle alignment & transcription, for humans and machines.**
 
-`word-align` produces word-level and broadcast-quality sentence-level SRT files by
-cascading multiple speech engines, each one only touching what the previous
-stage couldn't solve. The alignment and segmentation logic comes out of
-thousands of hours of real professional captioning work across 7+ languages;
-this repository is that logic extracted into a documented, tested package.
-See [Status](#status) for what is production-proven and what is not.
+WordAlign turns any audio or video file into perfectly timed subtitles — word-level and sentence-level SRT, plus a clean transcript. It combines multiple ASR engines (Vosk, WhisperX, Qwen ASR) with forced alignment (MFA) and a smart QA review pass that fixes timing, splits lines to your character limit, restores punctuation and capitalization, and flags anything suspicious.
 
-```
-                        ┌─────────────────────────────────────────────┐
-  audio ──┬──────────►  │  ALIGNMENT WATERFALL (cheapest first)       │
-          │             │                                             │
-transcript┤             │  1. Vosk (parallel CPU)   ~90% of words     │
- (or none:│             │  2. rough SRT (optional)  cheap extra hits  │
- ensemble │             │  3. WhisperX + wav2vec2   GPU precision     │
- builds   │             │  4. MFA "surgical mode"   gaps only         │
- one)     │             │  5. interpolation         the last few      │
-          │             └──────────────┬──────────────────────────────┘
-          │                            ▼
-          │             ┌─────────────────────────────────────────────┐
-          └───────────► │  3-PHASE ITERATIVE SEGMENTER                │
-                        │  sentence merging → CPL/duration limits →   │
-                        │  clause-aware line balancing (7 languages)  │
-                        └──────────────┬──────────────────────────────┘
-                                       ▼
-                  name_word_level.srt   name_sentence_level.srt
-```
+**v2.0 is a full rewrite:** a modular plugin engine, a Model Manager that finds your local models (no forced downloads), a built-in **web GUI** (dark mode by default), a Smart Transcript Review system, and one-click portable builds for Windows — no Python or terminal required.
 
-## Why a waterfall?
+---
 
-No single engine solves word timing well. Vosk is fast but misses words;
-WhisperX's wav2vec2 forced alignment is precise but expensive and can drift on
-long silences; Montreal Forced Aligner is the gold standard but impractical to
-run on a full recording. The waterfall runs each engine **only on what remains
-unsolved**, so you get MFA-grade precision at a fraction of MFA's cost. In
-production use on long-form dialogue, the first (CPU-only) pass typically
-covers ~90% of words before the GPU is ever touched, and MFA runs on isolated
-gap slices instead of whole files. Every word in the output is traceable to
-its source engine — the per-engine breakdown is printed at the end of every
-run.
+## 🖥️ Screenshots
 
-## Transcript-free ensemble mode
+The GUI runs in your browser (auto-opened), with **dark mode by default** — toggle to light any time with the header button (or `?light=1` in the URL).
 
-Given audio with no reference transcript, `word-align` builds one by **making
-the engines vote** — a time-anchored, confidence-weighted scheme (a lightweight
-descendant of ROVER, Fiscus 1997), because no single model wins on every axis:
+| Dark mode (default) | Light mode |
+|---|---|
+| ![WordAlign GUI dark mode](docs/screenshots/gui-dark.png) | ![WordAlign GUI light mode](docs/screenshots/gui-light.png) |
 
-- **WhisperX** (Whisper large-v3 + wav2vec2) is the backbone: strongest
-  transcription and 99-language coverage, so it anchors both the word sequence
-  and the top vote weight.
-- **Qwen3-ASR** (+ Qwen3-ForcedAligner) is a **timed** challenger: a close
-  second on transcription with real word timestamps, so it can *overturn* a
-  backbone error, not merely reinforce it. It runs in its own virtualenv via a
-  small subprocess bridge (see Install), so its dependencies never collide with
-  the WhisperX stack.
-- **Vosk** is an architecturally independent voter — weakest on words but the
-  most accurate on **timestamps**, which is why it seeds the final timing.
-- Every consensus word keeps a fused agreement score, and low-agreement words
-  are flagged for human review — because in professional captioning, knowing
-  *where the transcript is uncertain* is as valuable as the transcript itself.
+---
 
-Vote weight follows *transcription* accuracy (WhisperX > Qwen > Vosk); final
-**timing** is drawn from the waterfall, where Vosk leads. The consensus is fed
-through the same alignment path as a human transcript, so both modes share one
-battle-tested segmenter.
+## ✨ What's New in 2.0
 
-NVIDIA NeMo's Parakeet/Canary remain available as legacy voters
-(`--engines parakeet,canary`) for anyone who has them installed.
+- **🖥️ Web GUI** — drag-and-drop files, pick a quality preset, click Run. Real progress bar, live log, cancel button. Opens in your default browser; no install beyond the app itself.
+- **🌙 Dark mode** — default theme, one-click toggle.
+- **🧠 Smart Transcript Review** — an automatic QA pass that restores **punctuation and capitalization** (via a local LLM like Gemma 4 12B through llama.cpp, with a rule-based fallback), re-times out-of-sync words, detects hallucinated/duplicated text, and reports confidence issues.
+- **🧩 Plugin engine architecture** — adding a new ASR/alignment engine is a drop-in plugin. No core edits, no CLI edits, no GUI edits.
+- **📦 Model Manager** — auto-detects your installed models (Vosk, Whisper, Hugging Face cache, MFA) and every model path is configurable. No surprise downloads.
+- **🌍 MFA for all supported languages** — 65+ languages mapped to Montreal Forced Aligner pretrained models, threaded through the gap-filling path.
+- **🔁 Realignment, recovery, benchmarking** — auto re-align after QA, crash recovery with progress checkpointing, built-in benchmark suite.
+- **📊 Manifest & cache** — fingerprint-based caching (re-runs are instant), job manifests, SQLite history database.
 
-## Install
+---
 
-```bash
-git clone https://github.com/ghalymt/word-align
+## 🚀 Quick Start
+
+### Windows — for non-technical users (no Python, no terminal)
+
+1. Download the latest **`WordAlign-portable.zip`** from the [Releases page](https://github.com/ghalymt/word-align/releases).
+2. Unzip anywhere (e.g. `C:\WordAlign`).
+3. Double-click **`Launch WordAlign.vbs`** — a browser tab opens with the GUI after a short wait (first launch extracts the app, ~2–3 minutes).
+4. Drop in your audio/video, pick settings, hit **Run**.
+
+> Vosk models are the out-of-the-box engine. If you already have Vosk models installed (e.g. under `D:\Subtitle edit\Vosk`), set the folder once in the GUI's **Model Paths** panel — no downloads needed. The same applies to Whisper, Qwen and MFA models.
+
+### Windows — from source (Python 3.10+)
+
+```bat
+git clone https://github.com/ghalymt/word-align.git
 cd word-align
-pip install -r requirements.txt          # core (WhisperX path)
-pip install vosk                         # optional: waterfall stage 1 / voter
-pip install tensorflow tensorflow-hub    # optional: experimental tagging
-pip install textgrid                     # optional: MFA gap-filling
-pip install "nemo_toolkit[asr]"          # optional: legacy Parakeet/Canary voters
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+wordalign --gui            :: or just: wordalign
+:: CLI:
+wordalign --engines vosk -l en input.mp4 -o out
 ```
 
-`ffmpeg`/`ffprobe` must be on PATH. For the MFA stage, install
-[Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/) and
-either put `mfa` on PATH or point `WORDALIGN_MFA` at the executable or its
-conda env. Vosk models go in any directory, referenced via `--vosk-models` or
-`WORDALIGN_VOSK_MODELS`.
-
-**All model paths are configurable.** Every ASR model directory can be set
-per-model via CLI flags or environment variables. Leave any unset — WordAlign
-auto-detects them from standard cache locations (`~/.cache/whisper`,
-`~/.cache/vosk`, HuggingFace hub cache, etc.):
-
-| Model | CLI flag | Environment variable | Auto-detect location |
-|-------|----------|---------------------|----------------------|
-| Vosk | `--vosk-models` | `WORDALIGN_VOSK_MODELS` | `~/.cache/vosk` |
-| Whisper / faster-whisper | `--whisper-models` | `WORDALIGN_WHISPER_MODELS` | `~/.cache/whisper` |
-| Qwen ASR / aligner | `--qwen-models` | `WORDALIGN_QWEN_MODELS` | HF cache (`models--Qwen--*`) |
-| HuggingFace cache | `--hf-cache` | `WORDALIGN_HF_CACHE` | `HF_HOME` / `~/.cache/huggingface` |
-| MFA acoustic models | `--mfa-models` | `WORDALIGN_MFA_MODELS` | `~/Documents/MFA` |
+### Linux / macOS — from source (Python 3.10+)
 
 ```bash
-# Example: models spread across several custom drives
-python -m wordalign interview.mp4 -t interview.txt \
-    --vosk-models D:/models/vosk \
-    --whisper-models D:/models/whisper \
-    --hf-cache E:/models/huggingface
+git clone https://github.com/ghalymt/word-align.git
+cd word-align
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+wordalign --gui            # opens the browser GUI
+# CLI:
+wordalign --engines vosk -l en input.mp4 -o out
 ```
 
-New engines can register their own model type in
-`wordalign/models/paths.py` — the CLI, GUI, and auto-detection pick it up
-without further changes.
+> Linux/macOS packages (AppImage, .deb, Homebrew) are planned — see [Releases](https://github.com/ghalymt/word-align/releases) for current assets. The Python source install works everywhere today.
 
-**Qwen voter (ensemble mode).** Qwen3-ASR ships its own torch, which usually
-differs from the WhisperX stack's, so word-align calls it out-of-process. Point
-it at the virtualenv that has [`qwen-asr`](https://pypi.org/project/qwen-asr/)
-installed and (for offline use) the local HuggingFace model cache:
+---
+
+## 🧑‍💻 CLI Reference
+
+```text
+wordalign [INPUT] [OPTIONS]
+
+Core options:
+  -o, --out DIR            Output directory (default: next to input)
+  --engines LIST           Engines: whisperx,qwen,vosk  (default: whisperx,qwen,vosk)
+                           Also available: mfa, yamnet
+  -l, --language CODE      Language code, e.g. en, ar, fr, de, es, pt (default: auto)
+  -c, --cpl N              Max characters per subtitle line (default: 42)
+  --format FORMAT          Output formats: srt, vtt, txt, json (default: srt)
+
+Quality & engines:
+  --use-mfa                Enable MFA forced alignment for gap-filling
+  --mfa-cmd PATH           Path to the MFA executable
+  --whisper-models DIR     Whisper models directory (overrides auto-detect)
+  --vosk-models DIR        Vosk models directory (overrides auto-detect)
+  --hf-cache DIR           Hugging Face cache directory (overrides auto-detect)
+  --mfa-models DIR         MFA models directory (overrides auto-detect)
+
+Smart transcript review:
+  --qa                    Run the QA review pass (realignment + checks)
+  --punctuation           Restore punctuation & capitalization
+  --llm-engine ENGINE     LLM backend: llama_cpp, openai, anthropic (default: llama_cpp)
+  --llm-model PATH        LLM model file (GGUF) or model name
+  --llm-mtp-model PATH    MTP draft model for speculative decoding
+  --no-mtp                Disable MTP speculative decoding
+
+GUI:
+  --gui                   Start the web GUI (default when no input given)
+  --port N                GUI port (default: 5575)
+```
+
+Examples:
 
 ```bash
-export WORDALIGN_QWEN_PYTHON=/path/to/qwen-venv/bin/python   # Windows: ...\Scripts\python.exe
-export WORDALIGN_QWEN_MODELS=/path/to/qwen/models            # holds Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B
+# Vosk only (CPU, no GPU required), English, 42 CPL, with punctuation restored
+wordalign --engines vosk -l en --punctuation video.mp4
+
+# Maximum quality: WhisperX + Qwen + Vosk ensemble with MFA + QA
+wordalign --engines whisperx,qwen,vosk --use-mfa --qa video.mp4
+
+# Use your locally installed models (no downloads)
+wordalign --vosk-models "D:\Subtitle edit\Vosk" --engines vosk -l en video.mp4
 ```
 
-If `qwen_asr` is importable in word-align's own environment, no bridge is
-needed — it runs in-process. `--qwen-python` / `--qwen-models` override the
-environment variables, and `--qwen-chunk-seconds` bounds VRAM on long files.
+---
 
-Because most of those pieces are optional and several are heavy, there is a
-preflight check that tells you exactly what is present, what is missing, and
+## 🧠 Smart Transcript Review (new in 2.0)
 
-**Smart punctuation (recommended for readable subtitles).** Speech engines
-(Vosk especially) output lowercase text with no punctuation. Enable the
-restoration stage with `--punctuation`; it uses a local llama.cpp model when
-configured (with optional MTP draft for speed) and falls back to automatic
-rules otherwise:
+Raw ASR output is lowercase and punctuation-free, which is unusable as subtitles. WordAlign's review stage fixes this:
+
+1. **Punctuation & capitalization restoration** — a local LLM (e.g. Gemma 4 12B via llama.cpp) rewrites each cue's text **without adding, removing, or reordering words**. A rule-based restorer (capitalization, terminal periods, lowercase *i*) is always available as a fallback, so the feature works out of the box.
+2. **Realignment** — words that drifted off their timestamps are re-aligned to the audio.
+3. **Deterministic checks** — line length (CPL), duplicate lines, hallucination risk, code-switch detection, confidence issues.
+4. **Recovery** — if a stage fails, the pipeline resumes from the last checkpoint instead of restarting.
+
+Configuration is explicit — all paths are configurable, and the LLM is optional:
 
 ```bash
-python -m wordalign interview.mp4 -t interview.txt --punctuation \
-    --llm-engine D:/llama.cpp \
-    --llm-model F:/models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf \
-    --llm-mtp-model F:/models/mtp-gemma-4-12B-it.gguf   # enables MTP
+wordalign --punctuation \
+  --llm-engine llama_cpp \
+  --llm-model "F:\LM_studio\Models\unsloth\gemma-4-12B-it-qat-GGUF\gemma-4-12B-it-qat-UD-Q4_K_XL.gguf" \
+  --llm-mtp-model "F:\LM_studio\Models\unsloth\gemma-4-12B-it-qat-GGUF\mtp-gemma-4-12B-it.gguf" \
+  --engines vosk -l en video.mp4
 ```
 
-| Setting | CLI flag | Environment variable |
-|---------|----------|----------------------|
-| llama.cpp dir/exe | `--llm-engine` | `WORDALIGN_LLM_ENGINE` |
-| Main GGUF model | `--llm-model` | `WORDALIGN_LLM_MODEL` |
-| MTP draft GGUF | `--llm-mtp-model` | `WORDALIGN_LLM_MTP_MODEL` |
-| Disable MTP | `--no-mtp` | — |
+Environment variables: `WORDALIGN_LLM_ENGINE`, `WORDALIGN_LLM_MODEL`, `WORDALIGN_LLM_MTP_MODEL`, `WORDALIGN_LLM_MTP`.
 
-The restorer capitalizes, adds punctuation, and wraps cues to the configured
-CPL without changing the words, so timestamps stay in sync.
+---
 
-Because most of those pieces are optional and several are heavy, there is a
-preflight check that tells you exactly what is present, what is missing, and
-which of the two categories it falls into:
+## 🌍 Languages & Models
+
+WordAlign supports **65+ languages** across its engines:
+
+- **Vosk** — en, ar, zh, fr, de, es, pt, it, nl, ru, ja, fa, tr, sv, ca, uk, tl, vi, hi, hr, sr, bs, th, pl + more (depends on which Vosk models you have installed).
+- **WhisperX / Qwen ASR** — any language supported by Whisper / Qwen3-ASR.
+- **MFA (forced alignment)** — mapped pretrained models for 65+ languages (English ARPA, Arabic, Mandarin, French, German, Spanish, Portuguese, Italian, Dutch, Russian, Japanese, Korean, Persian, Turkish, Swedish, Catalan, Ukrainian, Vietnamese, Hindi, Croatian, Serbian, Bosnian, Thai, Polish, Czech, Slovak, Greek, Romanian, Hungarian, Hebrew, Finnish, Danish, Norwegian, Indonesian, Malay, Tagalog, Bengali, Urdu, Tamil, Telugu, Nepali, Sinhala, Khmer, Lao, Burmese, Armenian, Georgian, Bulgarian, Macedonian, Slovenian, Albanian, Galician, Basque, Swahili, Amharic, Zulu, Xhosa, Yoruba, Igbo, Hausa, Cebuano, and more). Languages without a pretrained MFA model fall back to English automatically.
+
+### Model paths — all configurable
+
+WordAlign never forces downloads. Every model directory is auto-detected **and** overridable, via CLI flags, environment variables, or the GUI's Model Paths panel:
+
+| Models | CLI flag | Environment variable | Auto-detect |
+|---|---|---|---|
+| Vosk | `--vosk-models DIR` | `WORDALIGN_VOSK_MODELS` | `~/vosk-models`, `D:\Subtitle edit\Vosk`, … |
+| Whisper / WhisperX | `--whisper-models DIR` | `WORDALIGN_WHISPER_MODELS` | `~/.cache/whisper`, `D:\Subtitle edit\Whisper\Models`, HF cache |
+| Qwen (HF) | `--hf-cache DIR` | `WORDALIGN_HF_CACHE` | `~/.cache/huggingface/hub` |
+| MFA | `--mfa-models DIR` | `WORDALIGN_MFA_MODELS` | `~/Documents/MFA`, conda envs |
+
+The `/api/model-paths` endpoint (and the GUI panel) shows exactly what was resolved on your machine.
+
+---
+
+## 🏗️ Architecture
+
+```
+word-align/
+├── launcher.py            # Entry point: no args = GUI, args = CLI
+├── build.spec / build.py  # PyInstaller portable build
+├── wordalign/
+│   ├── cli_v2.py          # CLI (2.0) — thin layer over PipelineRunner
+│   ├── core/
+│   │   ├── pipeline.py    # PipelineRunner — the single pipeline used by CLI + GUI
+│   │   ├── types.py, config.py, events.py
+│   │   ├── cache.py       # fingerprint-based job caching
+│   │   ├── database.py    # SQLite job history
+│   │   ├── fingerprint.py # audio fingerprinting
+│   │   ├── manifest.py    # job manifests
+│   │   ├── recovery.py    # crash recovery / checkpoints
+│   │   ├── gpu_scheduler.py
+│   │   └── converters.py
+│   ├── engines/           # Engine adapters (plugin architecture)
+│   │   ├── vosk_engine.py, whisperx_engine.py, qwen_engine.py
+│   │   ├── mfa_engine.py  # 65+ language map, surgical gap alignment
+│   │   ├── yamnet_engine.py, nemo_engine.py   # nemo = legacy
+│   │   └── adapters/      # runtime adapters (in_process / subprocess / external)
+│   ├── plugins/           # Plugin registry, protocol, manifests, capabilities
+│   ├── models/            # Model manager, catalog, validator, paths, downloader
+│   ├── qa/                # Smart Transcript Review
+│   │   ├── punctuation.py # LLM + rule-based punctuation/capitalization
+│   │   ├── realignment.py, deterministic.py, engine.py, codeswitch.py
+│   │   └── providers/     # llama_cpp, openai, anthropic
+│   ├── runtimes/          # Runtime detection (python, conda, external)
+│   ├── profiles/          # Quality presets (cpu_only, fast, balanced, maximum_quality)
+│   ├── gui/               # Web GUI (app.html, server.py, waveform.py)
+│   └── benchmark.py       # Benchmark suite
+├── tests/                 # 151 tests: v1 (23) + v2 + todo + model paths + punctuation
+└── docs/                  # ARCHITECTURE.md, DEVELOPER.md, USER_GUIDE.md
+```
+
+**Key design rule:** the CLI and the GUI both call the same `PipelineRunner`. There is no separate pipeline for the GUI — what you see in the browser is exactly what the CLI does.
+
+**Plugins:** to add a new engine, drop a plugin into the registry with its manifest (name, capabilities, runtime). No edits to `cli.py`, `pipeline.py`, or GUI code. Engines can run **in-process**, as a **subprocess**, or as an **external service**.
+
+---
+
+## 🧪 Tests
 
 ```bash
-python preflight.py --vosk-models /path/to/vosk-models --lang en
+pip install -r requirements.txt
+python -m pytest tests/ -q     # 151 tests, all passing
 ```
 
-It reports CUDA and VRAM, verifies `ffprobe` actually executes rather than
-merely existing on PATH, and exits non-zero only when something genuinely
-blocks a run — optional gaps are listed but never fail the check.
+The 23 original v1 tests still pass unchanged — the v1 algorithms (`align.py`, `ensemble.py`, `segment.py`) are preserved untouched.
 
-## Use
+---
 
-```bash
-# Reference mode: you have a verbatim transcript
-python -m wordalign interview.mp4 -t interview.txt --vosk-models ~/vosk-models
+## 📦 Building the Portable Package (Windows)
 
-# Ensemble mode: audio only, engines vote on the transcript
-python -m wordalign interview.mp4 --engines whisperx,qwen,vosk -l en
-
-# Ensemble mode with a Word transcript deliverable
-python -m wordalign interview.mp4 -l en --doc docx
-
-# Extra timing source + experimental audio-event tags
-python -m wordalign film.mkv -t film.txt --srt rough_cut.srt --tags
-
-# Force CPU (e.g. no CUDA available, or debugging a GPU issue)
-python -m wordalign interview.mp4 -t interview.txt --device cpu
+```powershell
+# from the repo root, with Python + PyInstaller installed
+pyinstaller build.spec --noconfirm
+# produces dist\WordAlign.exe (single file) — wrap with dist\WordAlign-portable\
+# which includes Launch WordAlign.vbs + README.txt
 ```
 
-Run `python -m wordalign --help` for the full flag list. The ones worth
-knowing: `--engines` picks the ensemble voters, `--device {cuda,cpu}` forces
-the compute device, `--no-vosk` / `--no-mfa` skip waterfall stages, `--doc`
-selects the transcript document format, and `-o` redirects the output
-directory.
+The result is a fully offline, double-clickable app. The GUI runs a local server on `http://127.0.0.1:5575` and opens your browser automatically; nothing is uploaded anywhere.
 
-Outputs land next to the audio (or in `-o DIR`):
+---
 
-| file                        | contents                                        |
-| --------------------------- | ----------------------------------------------- |
-| `*_word_level.srt`          | one cue per word — the precision product        |
-| `*_sentence_level.srt`      | merged, balanced, CPL/duration-validated cues   |
-| `*_transcript.txt` / `.docx`| ensemble mode: consensus transcript document — paragraphed by speech pauses, `[HH:MM:SS]` stamps, and (docx) low-agreement words highlighted for review. Select with `--doc`: `txt`, `docx`, or `both` |
-| `*_audio_tags.srt` (`--tags`) | experimental: `[laughs]`-style event track    |
-| `*_combined.srt` (`--tags`) | dialogue + events, collision-adjusted           |
+## 📄 License & Notes
 
-## Segmentation rules
+- MIT License — see [LICENSE](LICENSE).
+- **NeMo (Parakeet/Canary)**: kept as *legacy* engines in the source (via `nemo_engine.py` / `nemo_adapter.py`) but **not** installed or recommended in 2.0 — the modern default ensemble is **WhisperX + Qwen + Vosk**. If you have NeMo installed, you can still opt in via `--engines parakeet,canary`; otherwise ignore it.
+- MFA model downloads happen through MFA's own tooling (`mfa model download acoustic <name>`) — WordAlign only needs the `mfa` executable and the model directories configured above.
 
-The segmenter enforces professional captioning constraints, and the layout is
-**configurable** to the `.srt` standard for the target format:
+---
 
-| flag | default | meaning |
-| --- | --- | --- |
-| `--max-cpl` | `42` | characters per line — **42** for regular video, **32** for vertical/social |
-| `--max-lines` | `2` | lines per cue |
-| `--max-duration-ms` | `7000` | maximum on-screen time per cue |
-| `--min-cue-ms` | `700` | minimum on-screen time per cue |
+## 🤝 Contributing
 
-The merge sweep grows its character budget from 1 up to `max-cpl × max-lines`
-(so a cue fills up to two lines), which lets small merges settle before large
-ones — greedy single-pass merging produces measurably worse breaks. Line
-balancing respects protected phrases, prefers breaking **before** function
-words, and uses language-aware clause markers for EN/FR/ES/DE/NL/IT/PT.
-
-Three principles keep the output review-ready:
-
-- **No forced bad breaks.** Balancing tries a gold-standard split, then a
-  relaxed one; if neither is clean it leaves the line long and *visible* for a
-  human, rather than hiding an ugly mid-phrase break.
-- **Abbreviations and tags stay whole.** `Mr.`, `Mrs.`, `Dr.`, `St.`, `Prof.` …
-  are not read as sentence ends, so `St. Michael's` is never split at the
-  period; and a pure `[music]`-style tag is never merged into dialogue.
-- **Clean timing.** Overlaps between cues are resolved to zero (trimming the
-  less-reliable side, never moving a Vosk-anchored timestamp, preserving starts
-  where possible); any sub-frame cue is extended into free space or merged into
-  its neighbour, so no subtitle flashes for a millisecond.
-
-## Tests
-
-```bash
-python tests/test_pipeline.py     # or: python -m pytest tests/ -q
-```
-
-23 tests, no GPU / audio / model weights required. They cover ensemble voting
-(challenger correction, the replacement margin, backbone selection, the
-reinforce-only role of untimed engines), the fill-only waterfall, interpolation
-monotonicity, configurable CPL, the no-panic balancer, isolated-tag protection,
-abbreviation-aware splitting, source-aware overlap resolution iterated to zero,
-the minimum-duration guard, consensus line-structuring, the Qwen worker's output
-parsing, CPL enforcement in the validator, tag stripping, terminal-punctuation
-detection, and transcript paragraphing. Several are regression tests pinned to
-specific bugs — each names the bug it guards against. Engine adapters need real
-audio and are not covered.
-
-## Status
-
-**Production-proven:** the alignment waterfall and the 3-phase segmenter.
-This is the logic that shipped tens of thousands of captioning jobs, and the
-test suite pins its behaviour.
-
-**GPU-verified (reference mode):** the packaged reference-mode pipeline —
-Vosk → WhisperX/wav2vec2 → MFA gap-filling → interpolation → segmenter — has
-been run end-to-end on real audio on an RTX 4070 Ti, producing valid word- and
-sentence-level SRT (all lines within the CPL limit, timings monotonic). Run
-`python preflight.py` first; it reports exactly what's installed.
-
-**GPU-verified (ensemble mode):** WhisperX + Qwen3-ASR + Vosk voting, with the
-Qwen voter reached through the subprocess bridge, has been run end-to-end on
-real audio — three engines vote, Vosk seeds the timing, and the segmenter emits
-clean multi-cue SRT plus a flagged transcript. Ensemble mode is newer than the
-reference path and its transcription quality is only ever as good as the voters,
-so low-agreement words are surfaced rather than hidden.
-
-**Experimental:** audio-event tagging (YAMNet), behind `--tags`.
-
-Ensemble vote weights reflect transcription accuracy on the author's material
-(WhisperX > Qwen > Vosk); tune `wordalign/ensemble.py::DEFAULT_PRIORS` for your
-own domain.
-
-## Known limitations
-
-Worth knowing before you reach for these paths:
-
-- **The MFA gap-filling stage is English-only.** `english_us_arpa` is
-  hardcoded for both the G2P and acoustic models. Non-English audio still
-  works — MFA is stage 4 of 5, and the waterfall degrades to interpolation —
-  but you lose that stage's precision. Threading a language parameter through
-  `MFAWrapper` is the obvious next contribution.
-- **Ensemble mode assumes English when `-l` is omitted.** The language is
-  needed up front to choose voters, before any audio has been decoded, so
-  there is no auto-detection in this mode. Pass `-l` explicitly for anything
-  that isn't English.
-- **Untimed engines can reinforce the backbone but never correct it.**
-  Canary-Qwen returns text without word timestamps, so its votes are
-  projected onto backbone positions by exact-token matching — which means a
-  vote only ever lands on a word the backbone already produced. In practice
-  Canary is a strong *confidence* signal and a strong defender of contested
-  slots, but it cannot propose a substitution. Fuzzy projection would change
-  this and is the second obvious contribution.
-- **Vosk models are large.** They are loaded once per worker process and
-  reused across chunks; with `MAX_WORKERS = 4` and a 1.8 GB English model,
-  budget memory accordingly or lower `MAX_WORKERS` in `config.py`.
-- **Sentence integrity outranks the duration cap.** A single sentence longer
-  than `MAX_DURATION_MS` is kept whole rather than split mid-clause; the
-  output validator reports it as `duration_long` instead. This is deliberate
-  — a cue that breaks a sentence badly is worse than a cue that lingers — but
-  it means a clean run can still report duration issues. Lower
-  `MAX_CPL`/`ITERATION_END` if you would rather force earlier breaks.
-
-## License
-
-MIT © 2026 [Mohamed Ghali](https://www.linkedin.com/in/mohammed-ghaly-subtitler)
-— veterinarian turned speech-pipeline engineer; 50,000+ captioning projects
-delivered.
+See [docs/DEVELOPER.md](docs/DEVELOPER.md) for the plugin API, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for internals, and [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for detailed usage.

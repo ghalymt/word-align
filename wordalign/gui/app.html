@@ -14,8 +14,34 @@
   --red: #c44; --red-bg: #fce8e8;
   --mono: 'SF Mono','Consolas',monospace; --sans: -apple-system,'Segoe UI',sans-serif;
 }
+/* Dark mode is the DEFAULT. Toggle via header button or ?light=1 URL. */
+body[data-theme="dark"] {
+  --bg: #131a24; --surface: #1b2431; --border: #2c3a4d;
+  --text: #e6edf5; --t2: #9fb0c3; --t3: #64748b;
+  --navy: #5b8fc7; --navy-l: #7ba6d6; --navy-bg: #223248;
+  --green: #6fbf7f; --green-bg: #1e3526;
+  --amber: #d9a83e; --amber-bg: #3a3119;
+  --red: #e07a7a; --red-bg: #3a2323;
+}
+body[data-theme="dark"] .form-group input,
+body[data-theme="dark"] .form-group select,
+body[data-theme="dark"] .form-group input:disabled {
+  background: #0e1520; color: var(--text); border-color: var(--border);
+}
+body[data-theme="dark"] .form-group input::placeholder { color: var(--t3); }
+body[data-theme="dark"] .file-box { border-color: var(--border); }
+body[data-theme="dark"] .file-box:hover, body[data-theme="dark"] .file-box.dragover { border-color: var(--navy); background: var(--navy-bg); }
+body[data-theme="dark"] .preset-card { border-color: var(--border); }
+body[data-theme="dark"] .preset-card.selected { border-color: var(--navy); background: var(--navy-bg); }
+body[data-theme="dark"] .engine-row { border-color: var(--border); background: var(--surface); }
+body[data-theme="dark"] .tgl .s { background: #3a4a5e; }
+body{font:14px var(--sans);background:var(--bg);color:var(--text);line-height:1.5;transition:background .2s,color .2s}
+header{background:var(--navy);color:#fff;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:16px;font-weight:600;letter-spacing:-.02em}
+header .right{display:flex;align-items:center;gap:10px}
+.theme-btn{background:transparent;border:1px solid #ffffff55;color:#fff;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer}
+.theme-btn:hover{background:#ffffff22}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font:14px var(--sans);background:var(--bg);color:var(--text);line-height:1.5}
 header{background:var(--navy);color:#fff;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
 header h1{font-size:16px;font-weight:600;letter-spacing:-.02em}
 header .status{font-size:11px;padding:3px 10px;border-radius:10px}
@@ -77,11 +103,14 @@ input[type=file]{display:none}
 .pref-ok{color:var(--green)}.pref-warn{color:var(--amber)}.pref-err{color:var(--red)}
 </style>
 </head>
-<body>
+<body data-theme="dark">
 
 <header>
   <h1>🎬 WordAlign 2.0</h1>
-  <span id="backend-status" class="status status-off">● Backend Offline</span>
+  <div class="right">
+    <span id="backend-status" class="status status-off">● Backend Offline</span>
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">☀ Light</button>
+  </div>
 </header>
 
 <div class="container">
@@ -248,6 +277,29 @@ input[type=file]{display:none}
 </div>
 
 <script>
+// ==================== THEME (dark default) ====================
+function applyTheme(theme) {
+  document.body.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-btn');
+  if (btn) btn.textContent = theme === 'dark' ? '☀ Light' : '🌙 Dark';
+  try { localStorage.setItem('wordalign-theme', theme); } catch(e) {}
+}
+function toggleTheme() {
+  const cur = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+(function initTheme() {
+  let theme = 'dark';  // dark is the default
+  try {
+    const saved = localStorage.getItem('wordalign-theme');
+    if (saved === 'light' || saved === 'dark') theme = saved;
+  } catch(e) {}
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('light') === '1') theme = 'light';
+  if (params.get('dark') === '1') theme = 'dark';
+  applyTheme(theme);
+})();
+
 const API = 'http://127.0.0.1:5575/api';
 let backend = false;
 let running = false;

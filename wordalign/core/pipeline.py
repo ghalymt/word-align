@@ -215,7 +215,8 @@ class PipelineRunner:
         if cfg.use_mfa:
             self._emit(StageStarted(stage="mfa", message="Running MFA surgical mode"))
             t0 = time.time()
-            make_surgical_mfa(aligned_words, cfg.audio_path, cfg.mfa_cmd)
+            make_surgical_mfa(aligned_words, cfg.audio_path, cfg.mfa_cmd,
+                              cfg.language or "en")
             self._emit(StageCompleted(stage="mfa",
                                        duration_seconds=time.time() - t0))
         self._check_cancel("mfa")
