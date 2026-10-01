@@ -9,12 +9,11 @@ it, the guard is False in the children and only the parent runs ``main()``.
 """
 import sys
 
-# Prefer the thin v2 CLI (delegates to PipelineRunner with PrintSink).
-# Fall back to the original CLI if v2 has an import error.
-try:
-    from .cli_v2 import main
-except Exception:
-    from .cli import main
+# No fallback to the v1 CLI: an import error here means the install is
+# broken (e.g. a package missing from the checkout), and silently switching
+# to the old CLI -- with different flags and behaviour -- hid exactly that.
+# The v1 CLI is still available explicitly: python -m wordalign.cli
+from .cli_v2 import main
 
 if __name__ == "__main__":
     sys.exit(main())
