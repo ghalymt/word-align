@@ -78,12 +78,41 @@ class TestBatch(unittest.TestCase):
 
     def test_recursive_and_skip_existing(self):
         self.run_cli("--recursive")
-        self.assertTrue((self.out / "d_sentence_level.srt").exists())
+        self.assertTrue((self.out / "sub" / "d_sentence_level.srt").exists())
         code, _ = self.run_cli("--recursive", "--skip-existing")
         statuses = {Path(e["media"]).name: e["status"]
                     for e in self.report()["files"]}
         self.assertEqual(statuses, {"a.wav": "skipped", "b.mp3": "skipped",
                                     "c.mp4": "failed", "d.wav": "skipped"})
+
+    def test_recursive_output_mirrors_subfolders(self):
+        # Regression: with -o and --recursive every file wrote straight into
+        # the output folder, so sub/a.wav overwrote a.wav's subtitles, and
+        # --skip-existing then skipped sub/a.wav as already done.
+        (self.src / "sub" / "a.wav").write_bytes(b"not-real-audio")
+        (self.src / "sub" / "a.txt").write_text("Another file.\n",
+                                                encoding="utf-8")
+        self.run_cli("--recursive")
+        top = (self.out / "a_sentence_level.srt").read_text("utf-8")
+        deep = (self.out / "sub" / "a_sentence_level.srt").read_text("utf-8")
+        self.assertIn("Hello there.", top)
+        self.assertIn("Another file.", deep)
+        self.run_cli("--recursive", "--skip-existing")
+        statuses = {os.path.relpath(e["media"], self.src): e["status"]
+                    for e in self.report()["files"]}
+        self.assertEqual(statuses[os.path.join("sub", "a.wav")], "skipped")
+
+    def test_same_name_in_one_folder_is_not_overwritten(self):
+        # a.wav and a.mp4 would both write a_sentence_level.srt.
+        (self.src / "a.mp4").write_bytes(b"not-real-audio")
+        code, out = self.run_cli()
+        self.assertEqual(code, 1)
+        self.assertIn("Hello there.", (self.out / "a_sentence_level.srt")
+                      .read_text("utf-8"))
+        entry = next(e for e in self.report()["files"]
+                     if Path(e["media"]).name == "a.wav")
+        self.assertEqual(entry["status"], "failed")
+        self.assertIn("same output name as a.mp4", entry["error"])
 
     def test_flags_apply_to_every_file(self):
         code, _ = self.run_cli("--formats", "srt,vtt")

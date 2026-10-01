@@ -5,13 +5,15 @@
 Each media file is paired with a transcript of the same name when one
 exists (``talk.mp4`` + ``talk.txt``, else ``talk.srt``); files without one
 run in transcript-free ensemble mode. Every other flag applies to every
-file. One file failing does not stop the batch: a summary is printed, a
+file. With ``-o`` and ``--recursive`` the subfolders are mirrored under the
+output folder, so equally named files in different subfolders keep apart. One file failing does not stop the batch: a summary is printed, a
 JSON report is written next to the outputs, and the exit code is non-zero
 if any file failed.
 """
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -98,17 +100,37 @@ def run_batch(argv: List[str], run_one: Callable, parse_args: Callable) -> int:
         return 1
 
     print(f"Batch: {len(media)} media file(s) in {folder}\n")
+    out_root = _output_dir(rest)
+    claimed = {}                  # output base -> media file that owns it
     entries = []
     for n, path in enumerate(media, 1):
         transcript = pair_transcript(path)
         file_argv = [*rest, str(path)]
         if transcript:
             file_argv += ["-t", str(transcript)]
+        out_dir = path.parent
+        if out_root:
+            out_dir = Path(out_root)
+            if recursive:
+                # Mirror the subfolder; argparse keeps the last -o given.
+                out_dir = out_dir / path.parent.relative_to(folder)
+                file_argv += ["-o", str(out_dir)]
         entry = {"media": str(path),
                  "transcript": str(transcript) if transcript else None}
         print(f"{'#' * 60}\n[{n}/{len(media)}] {path.name}"
               f"{' + ' + transcript.name if transcript else ' (ensemble mode)'}")
         started = time.time()
+        base = os.path.normcase(os.path.abspath(out_dir / path.stem))
+        if base in claimed:
+            # talk.mp4 next to talk.wav: both would write talk_*.srt.
+            entry.update(status="failed", outputs=[], seconds=0.0,
+                         error=f"same output name as {claimed[base].name}; "
+                               "its subtitles would be overwritten "
+                               "(rename one of the two files)")
+            entries.append(entry)
+            print(f"  FAILED: {entry['error']}\n")
+            continue
+        claimed[base] = path
         try:
             cfg = parse_args(file_argv)
             if skip_existing and _already_done(cfg):
