@@ -108,7 +108,8 @@ Subtitle layout & output:
   --min-cue-ms MS          Min on-screen time per cue (default 700)
   --formats LIST           Sentence-level files: srt, vtt, ass (default: srt)
   --doc none|txt|docx|both Ensemble-mode transcript document (default: txt)
-  --diarize [--speakers N] Label speakers (needs pyannote.audio + HF_TOKEN)
+  --diarize [--speakers N] Label speakers (needs pyannote.audio + HF_TOKEN);
+                           --speakers N alone implies --diarize
   --tags                   Experimental audio-event tags ([music], [laughs], ...)
 
 Review:
@@ -153,7 +154,7 @@ wordalign --vosk-models "D:\Subtitle edit\Vosk" --engines vosk -l en video.mp4
 wordalign --batch D:\Lectures --recursive --formats srt,vtt
 ```
 
-Every media file in the folder is processed with the same options. `talk.mp4` is paired with `talk.txt` (or `talk.srt`) when present, otherwise it runs in ensemble mode. One failure does not stop the batch: a summary is printed, `wordalign_batch_report.json` is written next to the outputs, and the exit code is non-zero if anything failed. `--skip-existing` resumes an interrupted batch.
+Every media file in the folder is processed with the same options. `talk.mp4` is paired with `talk.txt` (or `talk.srt`) when present, otherwise it runs in ensemble mode. With `-o` and `--recursive`, subfolders are mirrored under the output folder. One failure does not stop the batch: a summary is printed, `wordalign_batch_report.json` is written next to the outputs, and the exit code is non-zero if anything failed. `--skip-existing` resumes an interrupted batch.
 
 ### Speaker labels
 
