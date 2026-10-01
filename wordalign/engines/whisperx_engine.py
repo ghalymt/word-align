@@ -131,8 +131,11 @@ def run_whisperx(audio_path: str,
         args += ["--models-dir", models_dir]
 
     try:
+        # UTF-8 both ways (see qwen_engine.run_qwen).
         proc = subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace",
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
         while True:
             try:
                 stdout, stderr = proc.communicate(timeout=0.25)

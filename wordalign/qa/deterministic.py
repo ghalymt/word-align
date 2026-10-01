@@ -111,11 +111,11 @@ def detect_timing_anomalies(consensus: List[WordResult]) -> List[TranscriptIssue
     issues = []
     timed = [w for w in consensus if w.start is not None and w.end is not None]
 
-    # Speaking rate anomalies
-    for i in range(len(timed) - 1):
+    # Speaking rate anomalies (every word, including the last one)
+    for i in range(len(timed)):
         w = timed[i]
-        w_next = timed[i + 1]
-        gap = w_next.start - w.end
+        w_next = timed[i + 1] if i + 1 < len(timed) else None
+        gap = w_next.start - w.end if w_next is not None else 0.0
         duration = w.end - w.start
 
         # Extremely fast speech

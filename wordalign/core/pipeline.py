@@ -866,7 +866,15 @@ class PipelineRunner:
                                         message="Vosk voter skipped (library or model missing).",
                                         level="warn"))
 
-        consensus = build_consensus(engine_words)
+        try:
+            consensus = build_consensus(engine_words)
+        except ValueError as exc:
+            # No engine produced timed words (all failed or unavailable).
+            # Return an empty transcript so run() reports it cleanly instead
+            # of crashing with a traceback.
+            self._emit(StageMessage(stage="primary", message=str(exc),
+                                    level="warn"))
+            return [], "", wx_events, []
         return (consensus, consensus_to_structured_text(consensus), wx_events,
                 engine_words.get("vosk", []))
 
@@ -920,15 +928,21 @@ class PipelineRunner:
         if cfg.use_qwen:
             self._primary_attempted.add("qwen")
             from ..engines.qwen_engine import run_qwen
-            qw_words = run_qwen(
-                cfg.audio_path, language,
-                qwen_python=cfg.qwen_python,
-                models_dir=cfg.qwen_models_dir,
-                chunk_seconds=cfg.qwen_chunk_seconds,
-                asr_model=cfg.qwen_asr_model,
-                aligner_model=cfg.qwen_aligner_model,
-                cancel_event=self.ctx.cancel_event,
-            )
+            # Same cache key as the Qwen refinement stage, so either run
+            # serves the other.
+            qw_words, _ = self._cached_engine(
+                "qwen", cfg.qwen_models_dir, language,
+                {"chunk_seconds": cfg.qwen_chunk_seconds,
+                 "asr_model": cfg.qwen_asr_model,
+                 "aligner_model": cfg.qwen_aligner_model},
+                lambda: run_qwen(
+                    cfg.audio_path, language,
+                    qwen_python=cfg.qwen_python,
+                    models_dir=cfg.qwen_models_dir,
+                    chunk_seconds=cfg.qwen_chunk_seconds,
+                    asr_model=cfg.qwen_asr_model,
+                    aligner_model=cfg.qwen_aligner_model,
+                    cancel_event=self.ctx.cancel_event))
             if qw_words:
                 return qw_words, self._primary_text(qw_words), wx_events, "qwen"
             if self.ctx.cancel_event.is_set():
@@ -941,9 +955,11 @@ class PipelineRunner:
             model_path = cfg.vosk_model_path(language)
             if VOSK_AVAILABLE and model_path:
                 self._primary_attempted.add("vosk")
-                vosk_words = run_vosk_parallel(
-                    cfg.audio_path, model_path,
-                    cancel_event=self.ctx.cancel_event)
+                vosk_words, _ = self._cached_engine(
+                    "vosk", model_path, language, {"workers": 4},
+                    lambda: run_vosk_parallel(
+                        cfg.audio_path, model_path,
+                        cancel_event=self.ctx.cancel_event))
                 if vosk_words:
                     return (vosk_words, self._primary_text(vosk_words),
                             wx_events, "vosk")
