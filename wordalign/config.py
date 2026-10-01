@@ -229,6 +229,9 @@ class PipelineConfig:
     doc_timestamps: bool = True                # [HH:MM:SS] paragraph prefixes
     # Sentence-level subtitle files to write: any of "srt", "vtt", "ass".
     subtitle_formats: tuple = ("srt",)
+    # Speaker labels via pyannote.audio (see wordalign.diarize).
+    diarize: bool = False
+    num_speakers: Optional[int] = None         # None -> let pyannote decide
     # Subtitle layout (per-line CPL x line count). 42x2 suits regular video,
     # 32x2 suits vertical/social. max_duration_ms caps a cue's on-screen time.
     max_cpl: int = 42

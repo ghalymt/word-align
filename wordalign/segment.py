@@ -225,6 +225,8 @@ def is_eligible_sentence(sentence_text: str, start_time: str,
 
 def shift_dangling_words(segments: List[Dict]) -> List[Dict]:
     for i in range(len(segments) - 1):
+        if segments[i].get("speaker") != segments[i + 1].get("speaker"):
+            continue   # never hand a word to another speaker's cue
         curr_text = segments[i]["text"].strip()
         next_text = segments[i + 1]["text"].strip()
         match = re.search(r"(.*,\s)([^,.\s!?]+)$", curr_text, re.DOTALL)
@@ -236,6 +238,31 @@ def shift_dangling_words(segments: List[Dict]) -> List[Dict]:
             segments[i]["text"] = prefix
             segments[i + 1]["text"] = f"{dangler} {next_text}"
     return segments
+
+
+def _span_speaker(words: List[Dict]) -> Optional[str]:
+    """Most common speaker among *words* (None when diarization is off)."""
+    counts: Dict[str, int] = {}
+    for w in words:
+        if w.get("speaker"):
+            counts[w["speaker"]] = counts.get(w["speaker"], 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
+def _speaker_runs(words: List[Dict]) -> List[Tuple[int, int]]:
+    """(start, end) index runs of *words* that share one speaker."""
+    runs: List[Tuple[int, int]] = []
+    start, current = 0, None
+    for i, word in enumerate(words):
+        speaker = word.get("speaker")      # unlabelled words join the run
+        if speaker and current and speaker != current:
+            runs.append((start, i))
+            start = i
+        if speaker:
+            current = speaker
+    if words:
+        runs.append((start, len(words)))
+    return runs
 
 
 def parse_human_transcript_to_srt_segments(
@@ -276,6 +303,7 @@ def parse_human_transcript_to_srt_segments(
                 "start_source": first.get("source"),
                 "end_source": last.get("source"),
                 "text": " ".join(w["word"] for w in aligned_words[start:end]),
+                "speaker": _span_speaker(aligned_words[start:end]),
             })
         print(f"[ok] Created {len(segments)} segments from SRT cue boundaries")
         return segments
@@ -298,11 +326,30 @@ def parse_human_transcript_to_srt_segments(
                 pos = i
                 break
         if pos != -1:
+            span = aligned_words[pos:pos + len(words)]
+            cursor = pos + len(words)
+            runs = _speaker_runs(span)
+            if len(runs) > 1:
+                # Diarization found a speaker change inside this line: one
+                # segment per speaker, so no cue mixes two people.
+                for a, b in runs:
+                    first_word, last_word = span[a], span[b - 1]
+                    if first_word.get("start") is None or last_word.get("end") is None:
+                        continue
+                    segments.append({
+                        "index": line_idx + 1,
+                        "start": ms_to_time(int(first_word["start"] * 1000)),
+                        "end": ms_to_time(int(last_word["end"] * 1000)),
+                        "start_source": first_word.get("source"),
+                        "end_source": last_word.get("source"),
+                        "text": " ".join(words[a:b]),
+                        "speaker": _span_speaker(span[a:b]),
+                    })
+                continue
             first_word = aligned_words[pos]
             last_word = aligned_words[pos + len(words) - 1]
             start = first_word.get("start")
             end = last_word.get("end")
-            cursor = pos + len(words)
             if start is not None and end is not None:
                 segments.append({
                     "index": line_idx + 1,
@@ -314,6 +361,7 @@ def parse_human_transcript_to_srt_segments(
                     "start_source": first_word.get("source"),
                     "end_source": last_word.get("source"),
                     "text": line,
+                    "speaker": _span_speaker(span),
                 })
             else:
                 print(f"  [skip] line {line_idx + 1}: missing timestamps")
@@ -346,6 +394,8 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
             next_txt = segments[j]["text"]
             if is_isolated_tag(next_txt):   # don't pull a tag into dialogue
                 break
+            if segments[j].get("speaker") != segments[i].get("speaker"):
+                break                       # never merge two speakers
             prev_txt = segments[j - 1]["text"]
             if next_txt and next_txt[0].isupper() and next_txt[0] != "I":
                 # A capitalised next word signals a new sentence -- unless the
@@ -369,6 +419,7 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
                                "start_source": segments[i].get("start_source"),
                                "end_source": segments[j].get("end_source"),
                                "text": " ".join(parts),
+                               "speaker": segments[i].get("speaker"),
                                "index": segments[i]["index"]})
                 i = j + 1
                 boundary_found = True
@@ -382,6 +433,7 @@ def process_phase1(segments: List[Dict]) -> List[Dict]:
                                "start_source": segments[i].get("start_source"),
                                "end_source": segments[j - 1].get("end_source"),
                                "text": full_text,
+                               "speaker": segments[i].get("speaker"),
                                "index": segments[i]["index"]})
             else:
                 merged.extend(group)
@@ -410,6 +462,8 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
             nxt = segments[j]
             if is_isolated_tag(nxt["text"]):
                 break
+            if nxt.get("speaker") != acc.get("speaker"):
+                break
             combined = acc["text"] + " " + nxt["text"]
             if has_terminal_punctuation(acc["text"]):
                 break
@@ -422,7 +476,8 @@ def process_phase2(segments: List[Dict]) -> List[Dict]:
             acc = {"start": acc["start"], "end": nxt["end"],
                    "start_source": acc.get("start_source"),
                    "end_source": nxt.get("end_source"),
-                   "text": combined, "index": acc["index"]}
+                   "text": combined, "index": acc["index"],
+                   "speaker": acc.get("speaker")}
             if has_terminal_punctuation(acc["text"]):
                 j += 1
                 break
@@ -436,7 +491,8 @@ def process_phase3(segments: List[Dict]) -> List[Dict]:
     return [{"index": s.get("index", i + 1), "start": s["start"],
              "end": s["end"], "text": balance_block_enhanced(s["text"]),
              "start_source": s.get("start_source"),
-             "end_source": s.get("end_source")}
+             "end_source": s.get("end_source"),
+             "speaker": s.get("speaker")}
             for i, s in enumerate(segments)]
 
 
@@ -566,7 +622,8 @@ def enforce_min_duration(segments: List[Dict],
     merged = 0
     for seg in segments:
         dur = time_to_ms(seg["end"]) - time_to_ms(seg["start"])
-        if out and dur < min_ms // 3:
+        if (out and dur < min_ms // 3
+                and out[-1].get("speaker") == seg.get("speaker")):
             prev = out[-1]
             if time_to_ms(seg["end"]) > time_to_ms(prev["end"]):
                 prev["end"] = seg["end"]

@@ -70,4 +70,5 @@ def dict_segment_to_typed(d: dict[str, Any]) -> SegmentResult:
         text=d.get("text", ""),
         start_source=d.get("start_source"),
         end_source=d.get("end_source"),
+        speaker=d.get("speaker"),
     )

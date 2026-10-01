@@ -117,6 +117,11 @@ def _parse_args(argv=None) -> PipelineConfig:
                    help="sentence-level subtitle formats to write, comma-"
                         "separated: srt (default), vtt (WebVTT), ass "
                         "(Advanced SubStation Alpha)")
+    p.add_argument("--diarize", action="store_true",
+                   help="label speakers (needs pyannote.audio and a Hugging "
+                        "Face token, HF_TOKEN, for its model)")
+    p.add_argument("--speakers", type=int, default=None, metavar="N",
+                   help="the number of speakers, if known (implies --diarize)")
     p.add_argument("--no-doc-timestamps", action="store_true",
                    help="omit [HH:MM:SS] paragraph timestamps in the "
                         "transcript document")
@@ -237,6 +242,8 @@ def _parse_args(argv=None) -> PipelineConfig:
         profile_overrides["doc_timestamps"] = False
     if a.tags:
         profile_overrides["tags"] = True
+    if a.speakers is not None and a.speakers < 1:
+        p.error(f"--speakers must be at least 1 (got {a.speakers})")
 
     return PipelineConfig(
         audio_path=a.audio,
@@ -262,6 +269,9 @@ def _parse_args(argv=None) -> PipelineConfig:
         doc_format=a.doc or "txt",
         doc_timestamps=not a.no_doc_timestamps,
         subtitle_formats=formats,
+        # --speakers N on its own clearly asks for speaker labels.
+        diarize=a.diarize or a.speakers is not None,
+        num_speakers=a.speakers,
         max_cpl=a.max_cpl if a.max_cpl is not None else 42,
         max_lines=a.max_lines if a.max_lines is not None else 2,
         max_duration_ms=a.max_duration_ms if a.max_duration_ms is not None else 7000,
