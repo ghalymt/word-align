@@ -10,6 +10,7 @@ prevents greedy over-merging:
 from __future__ import annotations
 
 import re
+from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 from .config import (CLAUSE_MARKERS, ITERATION_START, MAX_CPL,
@@ -151,12 +152,13 @@ def check_if_text_can_be_split_prettily(text: str) -> bool:
     total_len = count_visible_characters(text)
     if total_len <= _max_cpl:
         return True
-    if total_len > _cue_char_budget():
+    if total_len > _cue_char_budget() or _max_lines < 2:
         return False
     for i in range(1, len(text)):
         if text[i] == " " and evaluate_split(text, i, total_len) is not None:
             return True
-    return False
+    return any(_best_multiline_split(text, n) is not None
+               for n in range(3, _max_lines + 1))
 
 
 def find_word_boundary_near_limit(text: str, max_pos: int) -> int:
@@ -182,7 +184,7 @@ def balance_block_enhanced(text: str) -> str:
         return ""
 
     # An existing, already-valid two-line split is left exactly as it is.
-    if "\n" in stripped:
+    if "\n" in stripped and _max_lines >= 2:
         lines = stripped.split("\n")
         if len(lines) == 2:
             l1 = count_visible_characters(lines[0])
@@ -194,8 +196,8 @@ def balance_block_enhanced(text: str) -> str:
 
     flat = " ".join(stripped.replace("\n", " ").split())
     total = count_visible_characters(flat)
-    if total <= _max_cpl:
-        return flat
+    if total <= _max_cpl or _max_lines < 2:
+        return flat   # one line allowed: never invent a second one
 
     for ratio in (MIN_LINE_RATIO, RELAXED_LINE_RATIO):
         candidates = []
@@ -208,7 +210,60 @@ def balance_block_enhanced(text: str) -> str:
             best = min(candidates, key=lambda x: x["score"])
             return f"{best['l1']}\n{best['l2']}"
 
+    # Two lines cannot hold it cleanly; use more if the layout allows them.
+    for n_lines in range(3, _max_lines + 1):
+        lines = _best_multiline_split(flat, n_lines)
+        if lines is not None:
+            return "\n".join(lines)
+
     return flat   # no clean split -> leave long, visible for manual review
+
+
+# Upper bound on candidate splits examined per cue for 3+ lines (a cue holds
+# at most a few dozen words, so this is only a guard against pathological
+# input such as a very long run of one-letter tokens).
+_MAX_SPLIT_CANDIDATES = 20000
+
+
+def _best_multiline_split(text: str, n_lines: int) -> Optional[List[str]]:
+    """Best split of *text* into exactly *n_lines* lines, each <= CPL.
+
+    Scored like the two-line balancer: the spread between the longest and
+    shortest line, with the same preferences for where a line may end
+    (articles/prepositions start a line rather than end it, conjunctions
+    are good line starts). Lines may not start with closing punctuation or
+    end with an opening bracket. Returns None if no split fits.
+    """
+    words = text.split()
+    if len(words) < n_lines:
+        return None
+    best: Optional[Tuple[float, List[str]]] = None
+    for checked, cuts in enumerate(combinations(range(1, len(words)),
+                                                n_lines - 1)):
+        if checked >= _MAX_SPLIT_CANDIDATES:
+            break
+        bounds = (0, *cuts, len(words))
+        lines = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+        lengths = [count_visible_characters(line) for line in lines]
+        if max(lengths) > _max_cpl or min(lengths) < 2:
+            continue
+        if any(line[0] in ",;:!?…。！？‥" for line in lines[1:]):
+            continue
+        if any(line[-1] in "([{«" for line in lines[:-1]):
+            continue
+        score = float(max(lengths) - min(lengths))
+        for prev, nxt in zip(lines, lines[1:]):
+            w1 = prev.split()[-1].lower().rstrip(",.;")
+            w2 = nxt.split()[0].lower().rstrip(",.;")
+            if w2 in PREFER_NEW_LINE_WORDS:
+                score -= 5
+            if w1 in PREFER_NEW_LINE_WORDS:
+                score += 15
+            if w2 in CLAUSE_MARKERS["conjunctions"]:
+                score -= 3
+        if best is None or score < best[0]:
+            best = (score, lines)
+    return best[1] if best else None
 
 
 def is_eligible_sentence(sentence_text: str, start_time: str,
@@ -594,7 +649,8 @@ def longest_line_length(content: str) -> int:
 
 def validate_srt_output(entries, name: str) -> Dict[str, int]:
     print(f"\nValidating {name}...")
-    issues = {"overlaps": 0, "gaps_large": 0, "duration_long": 0, "cpl_high": 0}
+    issues = {"overlaps": 0, "gaps_large": 0, "duration_long": 0, "cpl_high": 0,
+              "lines_high": 0}
     # Pairwise checks: only defined for entries that have a successor.
     for i in range(len(entries) - 1):
         current = entries[i]
@@ -609,6 +665,8 @@ def validate_srt_output(entries, name: str) -> Dict[str, int]:
             issues["duration_long"] += 1
         if longest_line_length(entry.content) > _max_cpl:
             issues["cpl_high"] += 1
+        if len(entry.content.splitlines()) > _max_lines:
+            issues["lines_high"] += 1
     print(f"  Issues found: {sum(issues.values())}")
     for issue_type, count in issues.items():
         if count > 0:
