@@ -249,6 +249,22 @@ def _parse_args(argv=None) -> PipelineConfig:
     )
 
 
+def _harden_stdio() -> None:
+    """Never crash on a character the console/pipe encoding lacks.
+
+    Redirected to a file or pipe on Windows, stdout uses the ANSI code page
+    (cp1252), which has no "→". Progress output printed one for every
+    output file, so `wordalign a.mp4 > log.txt` wrote all its outputs and
+    then died with UnicodeEncodeError (exit 1). Transcript text in other
+    scripts hits the same wall.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass   # no stream (windowed build) or not reconfigurable
+
+
 def main(argv=None) -> int:
     # When the Vosk parallel pool forks a worker inside a frozen
     # PyInstaller bundle, the worker process re-executes the entry
@@ -257,6 +273,7 @@ def main(argv=None) -> int:
     # recognises that arg and runs the worker's target function instead
     # of re-entering ``main``.
     multiprocessing.freeze_support()
+    _harden_stdio()
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         from .gui.server import run_server

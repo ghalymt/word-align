@@ -689,6 +689,8 @@ class PipelineRunner:
                 ],
                 stage_durations=self._stage_durations,
                 warnings=self._warnings,
+                word_stats={"total": len(aligned_words),
+                            "sources": source_counts},
                 output_files=[
                     p for p in (
                         result.word_level_srt_path,

@@ -273,7 +273,7 @@ def _llama_cpp_dir() -> Optional[str]:
     if os.environ.get("WORDALIGN_LLM_ENGINE"):
         return os.environ["WORDALIGN_LLM_ENGINE"]
     candidate = _project_models_root() / "llama.cpp"
-    if (candidate / "llama-cli.exe").exists():
+    if any((candidate / name).exists() for name in ("llama-cli.exe", "llama-cli")):
         return str(candidate)
     return None
 
