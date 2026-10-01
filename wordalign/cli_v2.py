@@ -46,8 +46,9 @@ def _parse_args(argv=None) -> PipelineConfig:
                     "transcript-free ensemble mode.")
     p.add_argument("audio", nargs="?", help="audio or video file")
     p.add_argument("-t", "--transcript",
-                   help="verbatim human transcript (.txt). Omit to let the "
-                        "ensemble build one from the audio.")
+                   help="verbatim human transcript (.txt, or .srt to keep its cue "
+                        "boundaries). Omit to let the ensemble build one "
+                        "from the audio.")
     p.add_argument("--allow-transcript-mismatch", action="store_true",
                    help="continue when the transcript word count is incompatible "
                         "with the media duration")
