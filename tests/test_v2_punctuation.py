@@ -1,6 +1,7 @@
 """Tests for punctuation/capitalization restoration (smart transcriber)."""
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -68,10 +69,18 @@ class TestWrap(unittest.TestCase):
 class TestLlamaCppRestorer(unittest.TestCase):
 
     def test_is_ready_missing_model(self):
-        r = LlamaCppRestorer(engine="D:/llama.cpp", model="Z:/nonexistent.gguf")
-        ok, msg = r.is_ready()
+        # Self-contained: a temp "engine" dir holding a fake llama-cli, so
+        # the CLI lookup succeeds on any machine and the model check is what
+        # fails. (is_ready only checks that the file exists; never runs it.)
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = "llama-cli.exe" if os.name == "nt" else "llama-cli"
+            open(os.path.join(tmp, cli), "w").close()
+            r = LlamaCppRestorer(
+                engine=tmp, model=os.path.join(tmp, "nonexistent.gguf"))
+            ok, msg = r.is_ready()
         self.assertFalse(ok)
-        self.assertIn("model", msg)
+        self.assertIn("model not found", msg)
+        self.assertNotIn("llama-cli", msg)
 
     def test_parse_rejects_commentary(self):
         r = LlamaCppRestorer(engine="x", model="y")
