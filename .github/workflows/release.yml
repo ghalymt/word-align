@@ -1,0 +1,132 @@
+name: Release build
+
+# Builds the Windows portable ZIP (dist/WordAlign-portable.zip, app only)
+# on GitHub's Windows runners and smoke-tests the built WordAlign.exe.
+#
+#   git tag v2.1.0 && git push origin v2.1.0
+#       -> build, smoke-test, then create a DRAFT release with the ZIP and
+#          the CHANGELOG.md notes attached. Review it and press Publish.
+#   Actions tab -> "Release build" -> Run workflow, or a pull request that
+#   touches the build
+#       -> build and smoke-test only; the ZIP is kept as a run artifact.
+#
+# The Qwen/WhisperX backend environments (scripts/build_backends.ps1) are
+# far too large for a release asset and are not built here.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "build.py"
+      - "build.spec"
+      - "launcher.py"
+      - "pyproject.toml"
+      - "scripts/**"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows portable build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('wordalign/__init__.py').read()).group(1))")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match wordalign.__version__ ($version). Bump the version first."
+            exit 1
+          fi
+          python scripts/release_notes.py "$version" > /dev/null
+
+      - name: Install FFmpeg (bundled into the app)
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pyinstaller
+          # The same optional extras scripts/build_windows.ps1 installs:
+          # YAMNet audio tags and MFA TextGrid parsing.
+          python -m pip install tensorflow-cpu==2.21.0 tensorflow-hub==0.16.1 textgrid==1.6.1
+
+      - name: Build
+        run: python build.py --zip --skip-models
+
+      - name: Download a small Vosk model for the smoke test
+        shell: bash
+        run: |
+          curl -sSfL --retry 3 -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          mkdir -p "$RUNNER_TEMP/vosk"
+          unzip -q vosk.zip -d "$RUNNER_TEMP/vosk"
+          # The app looks English up as vosk-model-en-us-0.22; the 40 MB
+          # small model stands in for the 1.8 GB one.
+          mv "$RUNNER_TEMP/vosk/vosk-model-small-en-us-0.15" "$RUNNER_TEMP/vosk/vosk-model-en-us-0.22"
+
+      - name: Smoke-test WordAlign.exe
+        run: python scripts/smoke_test_bundle.py --exe dist/WordAlign/WordAlign.exe --vosk-models "${{ runner.temp }}/vosk"
+
+      - name: Check the ZIP fits a release asset
+        shell: bash
+        run: |
+          size=$(stat -c %s dist/WordAlign-portable.zip)
+          echo "WordAlign-portable.zip: $((size / 1048576)) MiB"
+          if [ "$size" -ge $((2 * 1024 * 1024 * 1024)) ]; then
+            echo "::error::The ZIP is over GitHub's 2 GiB release-asset limit."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WordAlign-portable
+          path: dist/WordAlign-portable.zip
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Draft GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: WordAlign-portable
+
+      - name: Release notes from CHANGELOG.md
+        run: python3 scripts/release_notes.py "$GITHUB_REF_NAME" > notes.md
+
+      - name: Create the draft release (or replace its ZIP on a re-run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" WordAlign-portable.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" WordAlign-portable.zip \
+              --draft --verify-tag \
+              --title "WordAlign ${GITHUB_REF_NAME#v}" \
+              --notes-file notes.md
+          fi
