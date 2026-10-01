@@ -602,6 +602,10 @@ class PipelineRunner:
                                    duration_seconds=time.time() - t0))
         self._check_cancel("interpolation")
 
+        if cfg.diarize:
+            self._diarize(cfg, aligned_words, ensemble_conf)
+            self._check_cancel("diarization")
+
         # Update typed results
         result.aligned_words = dicts_to_words(aligned_words, 0)
 
@@ -690,16 +694,22 @@ class PipelineRunner:
         if export.sentence_srt and srt is not None:
             path = f"{base}_sentence_level.srt"
             with open(path, "w", encoding="utf-8") as f:
-                f.write(srt.compose(sentence_entries))
+                f.write(srt.compose(self._srt_with_speakers(
+                    sentence_entries, segments, seg_cfg)))
             result.sentence_level_srt_path = path
             self._emit(StageMessage(stage="output",
                                     message=f"Sentence-level SRT: {len(sentence_entries)} entries -> {path}"))
         if sentence_entries:
+            from types import SimpleNamespace
             from ..subtitle_formats import compose_ass, compose_vtt
+            # VTT/ASS name speakers natively (voice span / Name field).
+            cues = [SimpleNamespace(start=e.start, end=e.end, content=e.content,
+                                    speaker=seg.get("speaker"))
+                    for e, seg in zip(sentence_entries, segments)]
             if export.vtt:
                 path = f"{base}_sentence_level.vtt"
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write(compose_vtt(sentence_entries))
+                    f.write(compose_vtt(cues))
                 result.sentence_level_vtt_path = path
                 self._emit(StageMessage(stage="output",
                                         message=f"Sentence-level WebVTT -> {path}"))
@@ -707,7 +717,7 @@ class PipelineRunner:
                 path = f"{base}_sentence_level.ass"
                 # BOM: some Windows players misdetect a BOM-less ASS script.
                 with open(path, "w", encoding="utf-8-sig") as f:
-                    f.write(compose_ass(sentence_entries,
+                    f.write(compose_ass(cues,
                                         title=os.path.basename(cfg.audio_path)))
                 result.sentence_level_ass_path = path
                 self._emit(StageMessage(stage="output",
@@ -774,6 +784,7 @@ class PipelineRunner:
                         ("qwen", cfg.use_qwen),
                         ("vosk", cfg.use_vosk),
                         ("mfa", cfg.use_mfa),
+                        ("diarize", cfg.diarize),
                     ) if enabled
                 ],
                 models_used=[
@@ -883,6 +894,50 @@ class PipelineRunner:
         consensus = build_consensus(engine_words)
         return (consensus, consensus_to_structured_text(consensus), wx_events,
                 engine_words.get("vosk", []))
+
+    def _diarize(self, cfg: PipelineConfig, aligned_words: List[Dict],
+                 ensemble_conf: Optional[List[Dict]]) -> None:
+        """Label every word with its speaker (pyannote), or explain why not."""
+        from ..diarize import DiarizationUnavailable, assign_speakers, diarize_turns
+        self._emit(StageStarted(stage="diarization", message="Detecting speakers"))
+        t0 = time.time()
+        try:
+            turns = diarize_turns(cfg.audio_path, num_speakers=cfg.num_speakers,
+                                  cache_dir=cfg.model_paths.huggingface_cache_dir)
+        except DiarizationUnavailable as exc:
+            self._emit(StageMessage(
+                stage="diarization",
+                message=f"Speaker labels skipped: {exc}.", level="warn"))
+        else:
+            labelled = assign_speakers(aligned_words, turns)
+            if ensemble_conf:
+                assign_speakers(ensemble_conf, turns)
+            speakers = sorted({w["speaker"] for w in aligned_words
+                               if w.get("speaker")})
+            self._emit(StageMessage(
+                stage="diarization",
+                message=f"{len(speakers)} speaker(s); {labelled}/"
+                        f"{len(aligned_words)} words labelled."))
+        self._emit(StageCompleted(stage="diarization",
+                                   duration_seconds=time.time() - t0))
+
+    def _srt_with_speakers(self, entries, segments: List[Dict],
+                           seg_cfg: SegmentationConfig):
+        """SRT has no speaker field: name the speaker in the text whenever it
+        changes ("Speaker 2: ..."), re-laid out within the job's CPL."""
+        if not any(seg.get("speaker") for seg in segments):
+            return entries
+        out, previous = [], None
+        with self._job_layout(seg_cfg):
+            for e, seg in zip(entries, segments):
+                speaker = seg.get("speaker")
+                content = e.content
+                if speaker and speaker != previous:
+                    flat = " ".join(content.split())
+                    content = balance_block_enhanced(f"{speaker}: {flat}")
+                previous = speaker or previous
+                out.append(srt.Subtitle(e.index, e.start, e.end, content))
+        return out
 
     def _primary_text(self, words: List[Dict]) -> str:
         """Render ASR words as subtitle-sized lines for the segmenter.

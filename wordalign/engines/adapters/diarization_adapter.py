@@ -10,7 +10,6 @@ transcript view as ``SPEAKER 1:`` / ``SPEAKER 2:``.
 """
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 
 from ...core.types import WordResult
@@ -71,34 +70,14 @@ class DiarizationAdapter(EnginePlugin):
     def _diarize_pyannote(self, words: List[WordResult], audio_path: str,
                           min_speakers: Optional[int],
                           max_speakers: Optional[int]) -> List[WordResult]:
-        """Run pyannote pipeline and map speaker turns to words."""
-        from pyannote.audio import Pipeline
-
-        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=token,
-        )
-        diarization = pipeline(audio_path,
-                               min_speakers=min_speakers,
-                               max_speakers=max_speakers)
-
-        # Build a timeline of (start, end, speaker)
-        turns = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            turns.append((turn.start, turn.end, speaker))
-
-        # Assign each word to the speaker whose turn contains its start time
-        result = []
-        for w in words:
-            speaker = None
-            if w.start is not None:
-                for start, end, spk in turns:
-                    if start <= w.start < end:
-                        speaker = spk
-                        break
-            result.append(self._with_speaker(w, speaker))
-        return result
+        """Run pyannote (via wordalign.diarize) and map speaker turns to words."""
+        from ...diarize import assign_speakers, diarize_turns
+        num = min_speakers if min_speakers and min_speakers == max_speakers else None
+        turns = diarize_turns(audio_path, num_speakers=num)
+        dicts = [{"start": w.start, "end": w.end} for w in words]
+        assign_speakers(dicts, turns)
+        return [self._with_speaker(w, d.get("speaker"))
+                for w, d in zip(words, dicts)]
 
     def _diarize_by_gaps(self, words: List[WordResult],
                          gap_threshold: float = 0.8) -> List[WordResult]:

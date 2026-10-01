@@ -117,6 +117,11 @@ def _parse_args(argv=None) -> PipelineConfig:
                    help="sentence-level subtitle formats to write, comma-"
                         "separated: srt (default), vtt (WebVTT), ass "
                         "(Advanced SubStation Alpha)")
+    p.add_argument("--diarize", action="store_true",
+                   help="label speakers (needs pyannote.audio and a Hugging "
+                        "Face token, HF_TOKEN, for its model)")
+    p.add_argument("--speakers", type=int, default=None, metavar="N",
+                   help="with --diarize: the number of speakers, if known")
     p.add_argument("--no-doc-timestamps", action="store_true",
                    help="omit [HH:MM:SS] paragraph timestamps in the "
                         "transcript document")
@@ -254,6 +259,8 @@ def _parse_args(argv=None) -> PipelineConfig:
         doc_format=a.doc or "txt",
         doc_timestamps=not a.no_doc_timestamps,
         subtitle_formats=formats,
+        diarize=a.diarize,
+        num_speakers=a.speakers,
         max_cpl=a.max_cpl if a.max_cpl is not None else 42,
         max_lines=a.max_lines if a.max_lines is not None else 2,
         max_duration_ms=a.max_duration_ms if a.max_duration_ms is not None else 7000,
