@@ -38,8 +38,8 @@ def _exe_in_env(env_root: Path) -> Optional[Path]:
 
 
 # MFA language model mapping. Maps ISO 639-1 codes to MFA model names.
-# Covers every language WordAlign supports; languages without an MFA
-# pretrained model fall back to English (get_mfa_models default).
+# A language that is not listed has no MFA model and MFA is skipped for it:
+# aligning with another language's acoustic model produces wrong timings.
 MFA_LANGUAGE_MAP = {
     "en": {"acoustic": "english_us_arpa", "g2p": "english_us_arpa", "dictionary": "english_us_arpa"},
     "ar": {"acoustic": "arabic_mfa", "g2p": "arabic_mfa", "dictionary": "arabic_mfa"},
@@ -105,9 +105,19 @@ MFA_LANGUAGE_MAP = {
 }
 
 
-def get_mfa_models(language: str = "en") -> dict:
-    """Get MFA acoustic, G2P, and dictionary model names for a language."""
-    return MFA_LANGUAGE_MAP.get(language, MFA_LANGUAGE_MAP["en"])
+def _primary_subtag(language: Optional[str]) -> str:
+    """'zh-CN' / 'pt_BR' / 'EN' -> 'zh' / 'pt' / 'en'."""
+    return (language or "").strip().lower().replace("_", "-").split("-")[0]
+
+
+def get_mfa_models(language: str = "en") -> Optional[dict]:
+    """MFA acoustic, G2P and dictionary model names, or None if MFA has no
+    model for *language* (there is deliberately no English fallback)."""
+    return MFA_LANGUAGE_MAP.get(_primary_subtag(language))
+
+
+def mfa_supports_language(language: Optional[str]) -> bool:
+    return get_mfa_models(language or "") is not None
 
 
 class MFAWrapper:
@@ -121,7 +131,11 @@ class MFAWrapper:
         self.env = os.environ.copy()
         self.mfa_exe = self._resolve_mfa(mfa_cmd)
         self.language = language
-        self.mfa_models = get_mfa_models(language)
+        models = get_mfa_models(language)
+        if models is None:
+            raise ValueError(f"MFA has no pretrained model for language "
+                             f"{language!r}; skipping MFA.")
+        self.mfa_models = models
         self.corpus_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -192,6 +206,9 @@ class MFAWrapper:
         # Allow env-var override via the unified ModelPaths mechanism
         if os.environ.get("WORDALIGN_MFA_MODELS"):
             candidates.append(Path(os.environ["WORDALIGN_MFA_MODELS"]))
+        # MFA's own model store when relocated (`mfa model download` saves there)
+        if os.environ.get("MFA_ROOT_DIR"):
+            candidates.append(Path(os.environ["MFA_ROOT_DIR"]) / "pretrained_models")
         # Last-resort legacy location (kept so previously installed setups still work)
         candidates.append(Path.home() / "Documents" / "MFA" / "pretrained_models")
 
@@ -201,6 +218,15 @@ class MFAWrapper:
                 return str(candidate)
         # Return the local canonical path even if missing — caller can detect.
         return str(candidates[0] / model_type / (model_name + exts.get(model_type, "")))
+
+    def missing_models(self) -> List[str]:
+        """Model files this language needs that are not installed."""
+        missing = []
+        for kind in ("acoustic", "g2p"):
+            path = self._get_model_path(kind, self.mfa_models[kind])
+            if not Path(path).exists():
+                missing.append(f"{kind} model {self.mfa_models[kind]}")
+        return missing
 
     def generate_custom_dictionary(self, words: Set[str],
                                    model_name: Optional[str] = None) -> Path:

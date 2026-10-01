@@ -137,7 +137,9 @@ def detect_language(text: str, default: str = "en") -> str:
     if not clean_text:
         return default
     try:
-        lang = detect_lang_text(clean_text)
+        # langdetect says "zh-cn" / "zh-tw"; every engine map is keyed by
+        # the primary subtag.
+        lang = detect_lang_text(clean_text).split("-")[0].lower()
         print(f"[ok] Auto-detected language: {lang}")
         return lang
     except Exception as exc:  # langdetect raises its own exception type

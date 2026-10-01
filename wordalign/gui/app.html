@@ -378,7 +378,7 @@ function applyPreset(name) {
   const selected = {
     cpu_only: ['vosk'],
     fast: ['vosk', 'whisperx'],
-    balanced: ['vosk', 'qwen_asr', 'whisperx'],
+    balanced: ['vosk', 'qwen_asr', 'whisperx', 'mfa'],
     maximum_quality: ['vosk', 'qwen_asr', 'whisperx', 'mfa', 'yamnet'],
   }[name] || ['vosk'];
   document.querySelectorAll('[data-engine-id]').forEach(input => {
@@ -405,7 +405,7 @@ function getEngineFlags() {
     vosk: preset === 'cpu_only' || preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality',
     qwen: preset === 'balanced' || preset === 'maximum_quality',
     whisperx: preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality',
-    mfa: preset === 'maximum_quality',
+    mfa: preset === 'balanced' || preset === 'maximum_quality',
   };
 }
 

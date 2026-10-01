@@ -548,7 +548,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 use_vosk=params.get("use_vosk", True),
                 use_qwen=params.get("use_qwen", True),
                 use_whisperx=params.get("use_whisperx", True),
-                use_mfa=params.get("use_mfa", False),
+                # Same default as the CLI: MFA runs when it is installed and
+                # has a model for the language, and is skipped otherwise.
+                use_mfa=params.get("use_mfa", True),
                 use_legacy_ensemble=params.get("use_legacy_ensemble", False),
                 max_cpl=int(params.get("max_cpl", 42)),
                 max_lines=int(params.get("max_lines", 2)),

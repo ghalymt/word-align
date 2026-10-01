@@ -82,6 +82,12 @@ def run_mfa_on_gaps(aligned_words: List[Dict], audio_path: str,
     if not gaps:
         print("[ok] No gaps to align with MFA.")
         return
+    missing = mfa_wrapper.missing_models()
+    if missing:
+        # Without its models MFA can only fail; skip before slicing audio.
+        print(f"[warn] MFA skipped: {', '.join(missing)} not installed "
+              f"(mfa model download acoustic|g2p <name>).")
+        return
     print(f"Found {len(gaps)} gaps covering "
           f"{sum(len(g) for g in gaps)} words.")
 
