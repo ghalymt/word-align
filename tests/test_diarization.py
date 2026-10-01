@@ -133,6 +133,20 @@ class TestPipelineSpeakerLabels(unittest.TestCase):
         self.assertEqual(cfg.num_speakers, 3)
         self.assertFalse(_parse_args(["a.wav"]).diarize)
 
+    def test_speakers_alone_turns_diarization_on(self):
+        # Regression: --speakers 2 without --diarize was silently ignored.
+        from wordalign.cli_v2 import _parse_args
+        cfg = _parse_args(["a.wav", "--speakers", "2"])
+        self.assertTrue(cfg.diarize)
+        self.assertEqual(cfg.num_speakers, 2)
+
+    def test_speaker_count_must_be_positive(self):
+        from wordalign.cli_v2 import _parse_args
+        with contextlib.redirect_stderr(io.StringIO()) as err, \
+                self.assertRaises(SystemExit):
+            _parse_args(["a.wav", "--diarize", "--speakers", "0"])
+        self.assertIn("--speakers must be at least 1", err.getvalue())
+
 
 class TestTranscriptDocument(unittest.TestCase):
 
