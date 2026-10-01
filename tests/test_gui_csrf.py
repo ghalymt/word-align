@@ -84,6 +84,28 @@ class TestForeignRequestsAreRefused(unittest.TestCase):
             self.assertEqual(self._request("POST", "/api/cache/clear",
                                            {"Origin": origin}), 403, origin)
 
+    def test_refused_large_body_is_not_read(self):
+        # Regression: a refused request's whole body was read into memory
+        # before the 403, so a website could make the server read (and
+        # hold) a multi-GB upload it was about to refuse.
+        import socket
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(
+                b"POST /api/upload HTTP/1.1\r\n"
+                b"Host: 127.0.0.1:%d\r\n"
+                b"Origin: https://evil.example\r\n"
+                b"Content-Type: multipart/form-data; boundary=x\r\n"
+                b"Content-Length: 5000000000\r\n\r\n" % self.port)
+            reply = b""
+            while b"\r\n\r\n" not in reply:
+                chunk = sock.recv(4096)       # times out if the server waits
+                if not chunk:
+                    break
+                reply += chunk
+        self.assertTrue(reply.startswith(b"HTTP/1.0 403")
+                        or reply.startswith(b"HTTP/1.1 403"), reply[:80])
+        self.assertIn(b"Connection: close", reply)
+
     def test_gui_origin_post_is_allowed(self):
         for name in ("127.0.0.1", "localhost"):
             status = self._request("POST", "/api/cache/clear", {

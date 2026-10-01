@@ -96,6 +96,8 @@ class _JobSink:
 
 
 _LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+# Largest request body a refused request still has read off the socket.
+_REFUSE_DRAIN_LIMIT = 64 * 1024
 
 
 def _split_host(value: str):
@@ -158,11 +160,24 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
         return None
 
     def _refuse(self, reason: str) -> None:
-        # Drain the body so the connection stays usable for the caller.
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        if length:
+        # A small body is drained so the connection stays usable; a large
+        # one (say, a refused multi-GB upload) is not read at all -- the
+        # reply closes the connection instead.
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            length = -1
+        drain = 0 <= length <= _REFUSE_DRAIN_LIMIT
+        if drain and length:
             self.rfile.read(length)
-        self._send_json({"error": f"Forbidden: {reason}"}, 403)
+        body = json.dumps({"error": f"Forbidden: {reason}"}).encode("utf-8")
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        if not drain:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_json(self, data: Any, status: int = 200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
