@@ -187,6 +187,11 @@ def _run_whisperx_inproc(audio_path: str,
         print("[info] WhisperX skipped: not importable in this interpreter.")
         return [], []
 
+    # HF_HOME is pointed at models_dir for the duration of this call only;
+    # leaving it set would redirect every later HuggingFace lookup in the
+    # process (Qwen, the LLM stage, the next job) to this directory.
+    previous_hf_home = os.environ.get("HF_HOME")
+    hf_home_overridden = False
     try:
         if cancel_event is not None and cancel_event.is_set():
             return [], []
@@ -198,6 +203,7 @@ def _run_whisperx_inproc(audio_path: str,
 
         if models_dir:
             os.environ["HF_HOME"] = models_dir
+            hf_home_overridden = True
 
         model = whisperx.load_model(model_size, device,
                                     compute_type=compute_type,
@@ -254,8 +260,8 @@ def _run_whisperx_inproc(audio_path: str,
         traceback.print_exc()
         return [], []
     finally:
-        # The legacy function used to restore HF_HOME here; nothing else
-        # needs cleanup because the in-process path doesn't take an
-        # override-and-restore promise anymore (the worker version owns
-        # its env entirely).
-        pass
+        if hf_home_overridden:
+            if previous_hf_home is None:
+                os.environ.pop("HF_HOME", None)
+            else:
+                os.environ["HF_HOME"] = previous_hf_home

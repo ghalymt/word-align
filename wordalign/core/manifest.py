@@ -17,7 +17,7 @@ import os
 import platform
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,7 +40,7 @@ def generate_manifest(audio_path: str,
     manifest = {
         "manifest_version": 1,
         "wordalign_version": __version__,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
         "input": {
             "audio_path": os.path.abspath(audio_path),
             "audio_fingerprint": fp.cache_key,

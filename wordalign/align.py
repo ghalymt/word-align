@@ -9,6 +9,7 @@ Stages (cheapest first, each only touching still-unmatched words):
 """
 from __future__ import annotations
 
+import shutil
 import tempfile
 from difflib import SequenceMatcher
 from typing import Dict, List
@@ -203,10 +204,15 @@ def print_alignment_statistics(aligned_words: List[Dict]) -> None:
 def make_surgical_mfa(aligned_words: List[Dict], audio_path: str,
                       mfa_cmd=None, language: str = "en") -> None:
     """Convenience: build a temp MFAWrapper and run gap alignment."""
+    temp_dir = tempfile.mkdtemp(prefix="mfa_surgical_")
     try:
-        temp_dir = tempfile.mkdtemp(prefix="mfa_surgical_")
         wrapper = MFAWrapper(work_dir=temp_dir, mfa_cmd=mfa_cmd,
                              language=language)
         run_mfa_on_gaps(aligned_words, audio_path, wrapper)
     except Exception as exc:
         print(f"[warn] Surgical MFA skipped: {exc}")
+    finally:
+        # run_mfa_on_gaps only cleans up after a full alignment; without
+        # this, MFA not being installed (the CLI default enables it), no
+        # gaps, or a failed slice each left a mfa_surgical_* dir behind.
+        shutil.rmtree(temp_dir, ignore_errors=True)
