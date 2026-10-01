@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -95,8 +95,89 @@ class _JobSink:
                                   completed_at=now)
 
 
+_LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+# Largest request body a refused request still has read off the socket.
+_REFUSE_DRAIN_LIMIT = 64 * 1024
+
+
+def _split_host(value: str):
+    """'127.0.0.1:5575' / '[::1]:5575' / 'localhost' -> (host, port|None)."""
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        host, _, rest = value[1:].partition("]")
+        port = rest[1:] if rest.startswith(":") else ""
+    else:
+        host, _, port = value.partition(":")
+    return host, (int(port) if port.isdigit() else None)
+
+
+def _allowed_hosts(bound_host: str) -> set:
+    """Host names this server answers to.
+
+    Loopback names always; the bound address when it is a specific one; and
+    WORDALIGN_ALLOWED_HOSTS (comma-separated) for deliberate LAN setups.
+    """
+    hosts = set(_LOOPBACK_NAMES)
+    if bound_host and bound_host not in ("0.0.0.0", "::", ""):
+        hosts.add(bound_host.lower())
+    extra = os.environ.get("WORDALIGN_ALLOWED_HOSTS", "")
+    hosts.update(h.strip().lower() for h in extra.split(",") if h.strip())
+    return hosts
+
+
 class PipelineAPIHandler(BaseHTTPRequestHandler):
     """HTTP handler for the GUI API — no external dependencies."""
+
+    def _foreign_request(self, state_changing: bool) -> Optional[str]:
+        """Why this request must be refused, or None if it may proceed.
+
+        The API listens on localhost, but any website open in the browser
+        can still send requests to it. Two checks keep those out:
+
+        * Host must name this server (blocks DNS rebinding, where an
+          attacker's domain is re-pointed at 127.0.0.1).
+        * A state-changing request that comes from a browser (it carries
+          Origin or Sec-Fetch-Site) must come from this server's own
+          origin -- the GUI page. Requests without either header come from
+          scripts or curl, which a website cannot make the browser send.
+        """
+        bound_host, port = self.server.server_address[:2]
+        allowed = _allowed_hosts(str(bound_host))
+        host, host_port = _split_host(self.headers.get("Host", ""))
+        if host not in allowed or host_port not in (None, port):
+            return "unexpected Host header"
+        if not state_changing:
+            return None
+        if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+            return "cross-site request"
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return None
+        parsed = urlparse(origin)
+        if (parsed.scheme != "http" or parsed.hostname not in allowed
+                or (parsed.port or 80) != port):
+            return "cross-origin request"
+        return None
+
+    def _refuse(self, reason: str) -> None:
+        # A small body is drained so the connection stays usable; a large
+        # one (say, a refused multi-GB upload) is not read at all -- the
+        # reply closes the connection instead.
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            length = -1
+        drain = 0 <= length <= _REFUSE_DRAIN_LIMIT
+        if drain and length:
+            self.rfile.read(length)
+        body = json.dumps({"error": f"Forbidden: {reason}"}).encode("utf-8")
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        if not drain:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_json(self, data: Any, status: int = 200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
@@ -180,6 +261,10 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
         })
 
     def do_GET(self):
+        reason = self._foreign_request(state_changing=False)
+        if reason:
+            self._refuse(reason)
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         params = parse_qs(parsed.query)
@@ -371,6 +456,10 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Not found"}, 404)
 
     def do_POST(self):
+        reason = self._foreign_request(state_changing=True)
+        if reason:
+            self._refuse(reason)
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
