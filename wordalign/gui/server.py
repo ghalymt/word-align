@@ -436,6 +436,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
 
     def _start_pipeline(self, body: dict) -> dict:
         """Start a pipeline run and return a job ID immediately."""
+        if not (body.get("audio_temp_path") or body.get("audio_path")):
+            # Without this a job was queued that could only fail.
+            return {"error": "No audio file given."}
         job_id = str(uuid.uuid4())[:8]
         upload_id = body.get("upload_id")
         owned_upload_dir = None

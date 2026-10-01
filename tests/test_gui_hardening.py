@@ -54,6 +54,13 @@ class TestJsonBodies(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(data["error"], "Job not found")
 
+    def test_run_without_audio_is_refused(self):
+        # Regression: {} (or a non-object body) queued a job with no audio.
+        status, data = self.post("/api/run", b"{}")
+        self.assertNotEqual(status, 200)
+        self.assertEqual(data["error"], "No audio file given.")
+        self.assertNotIn("job_id", data)
+
     def test_oversized_body_is_refused_unread(self):
         # Regression: the whole body was read into memory, however large.
         with socket.create_connection(("127.0.0.1", self.port),
