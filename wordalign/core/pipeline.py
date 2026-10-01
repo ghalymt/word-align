@@ -25,7 +25,7 @@ from ..align import (interpolate_timestamps, make_surgical_mfa,
                      match_timestamps, print_alignment_statistics)
 from ..config import PipelineConfig
 from ..ensemble import build_consensus
-from ..segment import (enforce_min_duration,
+from ..segment import (balance_block_enhanced, enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
                        resolve_overlaps, run_iterative_merging,
                        set_config, validate_srt_output)
@@ -206,7 +206,12 @@ class PipelineRunner:
         initial_segments = parse_human_transcript_to_srt_segments(
             original_text, aligned_words, cue_boundaries=cue_boundaries)
         if cue_boundaries:
-            segments = initial_segments
+            # Keep the input's cue membership (no merging), but still lay
+            # each cue out within the CPL budget and remove overlaps between
+            # neighbouring cues -- the validator checks both.
+            segments = [dict(seg, text=balance_block_enhanced(seg["text"]))
+                        for seg in initial_segments]
+            segments = resolve_overlaps(segments)
             self._emit(StageMessage(
                 stage="segmentation",
                 message=f"Preserving {len(segments)} cues from input SRT (no re-merging)."))
@@ -278,12 +283,19 @@ class PipelineRunner:
                     flat_lines: List[str] = []
                     cursor = 0
                     for c in cues:
-                        line_words = c.content.strip().split()
-                        if not line_words:
+                        content = c.content.strip()
+                        if not content:
                             continue
-                        flat_lines.append(c.content.strip())
-                        srt_cue_boundaries.append((cursor, cursor + len(line_words)))
-                        cursor += len(line_words)
+                        # Count words exactly as the aligner will see them:
+                        # [tags] are stripped from the word list, so they
+                        # must not occupy word slots here or every later
+                        # cue boundary shifts. Tag-only cues keep their
+                        # text (for --tags) but get no word span.
+                        flat_lines.append(content)
+                        n_words = len(strip_tags(content).split())
+                        if n_words:
+                            srt_cue_boundaries.append((cursor, cursor + n_words))
+                            cursor += n_words
                     original_text = "\n".join(flat_lines)
                     self._emit(StageMessage(
                         stage="init",
