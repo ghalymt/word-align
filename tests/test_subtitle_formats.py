@@ -39,6 +39,14 @@ class TestWebVtt(unittest.TestCase):
         out = compose_vtt([cue(1, 0, 1, "Q&A <live> & more")])
         self.assertIn("Q&amp;A &lt;live&gt; &amp; more", out)
 
+    def test_blank_line_inside_a_cue_does_not_end_it(self):
+        # Regression: a blank line ends a WebVTT cue, so the text after it
+        # was dropped by players (or read as the next cue's identifier).
+        out = compose_vtt([cue(1, 0, 1, "first line\n\nsecond line")])
+        self.assertIn("-->", out)
+        self.assertIn("first line\nsecond line\n", out)
+        self.assertNotIn("\n\nsecond", out)
+
     def test_speaker_becomes_a_voice_span(self):
         out = compose_vtt([cue(1, 0, 1, "Hi\nthere", speaker="Speaker 1")])
         self.assertIn("<v Speaker 1>Hi\nthere", out)
@@ -62,6 +70,10 @@ class TestAss(unittest.TestCase):
     def test_braces_are_escaped_and_speaker_is_the_name(self):
         out = compose_ass([cue(1, 0, 1, "use {braces}", speaker="Ann, host")])
         self.assertIn(",Default,Ann  host,0,0,0,,use \\{braces\\}", out)
+
+    def test_blank_lines_do_not_become_empty_ass_lines(self):
+        out = compose_ass([cue(1, 0, 1, "first line\n\nsecond line")])
+        self.assertIn(",,first line\\Nsecond line", out)
 
     def test_centiseconds_truncate(self):
         self.assertEqual(ass_timestamp(timedelta(seconds=3661.999)),

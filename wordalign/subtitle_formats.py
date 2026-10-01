@@ -42,7 +42,9 @@ def compose_vtt(cues: Iterable) -> str:
     """Render cues as a WebVTT document."""
     blocks = ["WEBVTT", ""]
     for n, cue in enumerate(cues, 1):
-        lines = [_vtt_escape(line) for line in cue.content.strip().split("\n")]
+        # A blank line ends a WebVTT cue, so empty lines are dropped.
+        lines = [_vtt_escape(line.strip())
+                 for line in cue.content.split("\n") if line.strip()]
         speaker: Optional[str] = getattr(cue, "speaker", None)
         if speaker and lines:
             lines[0] = f"<v {_vtt_escape(speaker)}>{lines[0]}"
@@ -57,7 +59,7 @@ def _ass_escape(text: str) -> str:
     # "{...}" is an override block in ASS; libass/mpv/VLC/ffmpeg render
     # "\{" and "\}" as literal braces. Line breaks become the hard "\N".
     text = text.replace("{", "\\{").replace("}", "\\}")
-    return "\\N".join(line.strip() for line in text.strip().split("\n"))
+    return "\\N".join(line.strip() for line in text.split("\n") if line.strip())
 
 
 def compose_ass(cues: Iterable, title: str = "WordAlign subtitles",
