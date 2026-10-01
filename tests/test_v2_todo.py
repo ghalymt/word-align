@@ -362,9 +362,8 @@ def test_mfa_language_map():
     assert en_models["acoustic"] == "english_us_arpa"
     fr_models = get_mfa_models("fr")
     assert fr_models["acoustic"] == "french_mfa"
-    # Unknown language defaults to English
-    unknown = get_mfa_models("xx")
-    assert unknown["acoustic"] == "english_us_arpa"
+    # Unknown language: no model, MFA is skipped (never English timing)
+    assert get_mfa_models("xx") is None
 
 def test_mfa_supported_languages():
     from wordalign.engines.mfa_engine import MFA_LANGUAGE_MAP

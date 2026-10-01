@@ -577,7 +577,14 @@ class PipelineRunner:
                                     level="info"))
         self._check_cancel("whisperx")
 
-        if cfg.use_mfa and self._stage_enabled("mfa"):
+        from ..engines.mfa_engine import mfa_supports_language
+        if (cfg.use_mfa and self._stage_enabled("mfa")
+                and not mfa_supports_language(language)):
+            self._emit(StageMessage(
+                stage="mfa",
+                message=f"MFA skipped: no pretrained MFA model for language "
+                        f"'{language}'.", level="warn"))
+        elif cfg.use_mfa and self._stage_enabled("mfa"):
             self._emit(StageStarted(stage="mfa", message="Running MFA surgical mode"))
             t0 = time.time()
             make_surgical_mfa(aligned_words, cfg.audio_path, cfg.mfa_cmd,
