@@ -1,7 +1,7 @@
 {
     "schema_version": 1,
     "name": "Maximum Quality",
-    "description": "All engines, full waterfall, MFA, QA + LLM review.",
+    "description": "All engines, full waterfall, MFA, deterministic QA, audio tags, txt + docx transcript.",
     "mode": "auto",
     "transcription": {
         "engines": [
