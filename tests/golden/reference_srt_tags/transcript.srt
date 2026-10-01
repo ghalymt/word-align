@@ -1,0 +1,23 @@
+1
+00:00:00,000 --> 00:00:00,400
+[music]
+
+2
+00:00:00,400 --> 00:00:01,900
+Good morning, everyone.
+
+3
+00:00:02,500 --> 00:00:04,900
+[papers rustle] Dr. Smith will open the session today.
+
+4
+00:00:05,500 --> 00:00:09,900
+We have a lot to cover, so please keep your questions short.
+
+5
+00:00:10,500 --> 00:00:13,400
+Does anyone need the slides before we begin?
+
+6
+00:00:14,000 --> 00:00:17,500
+Great, let's get started with the quarterly numbers.

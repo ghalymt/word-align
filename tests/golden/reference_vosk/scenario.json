@@ -1,0 +1,14 @@
+{
+  "description": "Human transcript; Vosk timings with three missed words (filled by interpolation).",
+  "args": [
+    "--no-qwen",
+    "--no-whisperx",
+    "--no-mfa",
+    "-l",
+    "en"
+  ],
+  "transcript": "transcript.txt",
+  "engines": {
+    "vosk": "vosk.json"
+  }
+}

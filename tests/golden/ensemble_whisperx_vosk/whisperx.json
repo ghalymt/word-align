@@ -1,0 +1,230 @@
+[
+ {
+  "word": "Good",
+  "start": 0.4,
+  "end": 0.7,
+  "conf": 0.93
+ },
+ {
+  "word": "morning,",
+  "start": 0.78,
+  "end": 1.215,
+  "conf": 0.93
+ },
+ {
+  "word": "everyone.",
+  "start": 1.295,
+  "end": 1.775,
+  "conf": 0.93
+ },
+ {
+  "word": "Dr.",
+  "start": 2.475,
+  "end": 2.685,
+  "conf": 0.93
+ },
+ {
+  "word": "Smith",
+  "start": 2.765,
+  "end": 3.11,
+  "conf": 0.93
+ },
+ {
+  "word": "will",
+  "start": 3.19,
+  "end": 3.49,
+  "conf": 0.93
+ },
+ {
+  "word": "open",
+  "start": 3.57,
+  "end": 3.87,
+  "conf": 0.93
+ },
+ {
+  "word": "the",
+  "start": 3.95,
+  "end": 4.205,
+  "conf": 0.93
+ },
+ {
+  "word": "session",
+  "start": 4.285,
+  "end": 4.72,
+  "conf": 0.93
+ },
+ {
+  "word": "today.",
+  "start": 4.8,
+  "end": 5.145,
+  "conf": 0.93
+ },
+ {
+  "word": "We",
+  "start": 5.845,
+  "end": 6.055,
+  "conf": 0.93
+ },
+ {
+  "word": "have",
+  "start": 6.135,
+  "end": 6.435,
+  "conf": 0.93
+ },
+ {
+  "word": "a",
+  "start": 6.515,
+  "end": 6.68,
+  "conf": 0.93
+ },
+ {
+  "word": "lot",
+  "start": 6.76,
+  "end": 7.015,
+  "conf": 0.93
+ },
+ {
+  "word": "to",
+  "start": 7.095,
+  "end": 7.305,
+  "conf": 0.93
+ },
+ {
+  "word": "cover,",
+  "start": 7.385,
+  "end": 7.73,
+  "conf": 0.93
+ },
+ {
+  "word": "so",
+  "start": 7.81,
+  "end": 8.02,
+  "conf": 0.93
+ },
+ {
+  "word": "please",
+  "start": 8.1,
+  "end": 8.49,
+  "conf": 0.93
+ },
+ {
+  "word": "keep",
+  "start": 8.57,
+  "end": 8.87,
+  "conf": 0.93
+ },
+ {
+  "word": "your",
+  "start": 8.95,
+  "end": 9.25,
+  "conf": 0.93
+ },
+ {
+  "word": "questions",
+  "start": 9.33,
+  "end": 9.855,
+  "conf": 0.93
+ },
+ {
+  "word": "short.",
+  "start": 9.935,
+  "end": 10.28,
+  "conf": 0.93
+ },
+ {
+  "word": "Does",
+  "start": 10.98,
+  "end": 11.28,
+  "conf": 0.93
+ },
+ {
+  "word": "anyone",
+  "start": 11.36,
+  "end": 11.75,
+  "conf": 0.93
+ },
+ {
+  "word": "need",
+  "start": 11.83,
+  "end": 12.13,
+  "conf": 0.93
+ },
+ {
+  "word": "the",
+  "start": 12.21,
+  "end": 12.465,
+  "conf": 0.93
+ },
+ {
+  "word": "slides",
+  "start": 12.545,
+  "end": 12.935,
+  "conf": 0.93
+ },
+ {
+  "word": "before",
+  "start": 13.015,
+  "end": 13.405,
+  "conf": 0.93
+ },
+ {
+  "word": "we",
+  "start": 13.485,
+  "end": 13.695,
+  "conf": 0.93
+ },
+ {
+  "word": "begin?",
+  "start": 13.775,
+  "end": 14.12,
+  "conf": 0.93
+ },
+ {
+  "word": "Great,",
+  "start": 14.82,
+  "end": 15.165,
+  "conf": 0.93
+ },
+ {
+  "word": "let's",
+  "start": 15.245,
+  "end": 15.59,
+  "conf": 0.93
+ },
+ {
+  "word": "get",
+  "start": 15.67,
+  "end": 15.925,
+  "conf": 0.93
+ },
+ {
+  "word": "started",
+  "start": 16.005,
+  "end": 16.44,
+  "conf": 0.93
+ },
+ {
+  "word": "with",
+  "start": 16.52,
+  "end": 16.82,
+  "conf": 0.93
+ },
+ {
+  "word": "the",
+  "start": 16.9,
+  "end": 17.155,
+  "conf": 0.93
+ },
+ {
+  "word": "quarterly",
+  "start": 17.235,
+  "end": 17.76,
+  "conf": 0.93
+ },
+ {
+  "word": "numbers.",
+  "start": 17.84,
+  "end": 18.275,
+  "conf": 0.93
+ }
+]

@@ -1,0 +1,132 @@
+[
+ {
+  "word": "the",
+  "start": 0.4,
+  "end": 0.704
+ },
+ {
+  "word": "weather",
+  "start": 0.844,
+  "end": 1.332
+ },
+ {
+  "word": "will",
+  "start": 1.472,
+  "end": 1.893
+ },
+ {
+  "word": "be",
+  "start": 2.033,
+  "end": 2.373
+ },
+ {
+  "word": "cold",
+  "start": 2.513,
+  "end": 3.009
+ },
+ {
+  "word": "and",
+  "start": 3.149,
+  "end": 3.557
+ },
+ {
+  "word": "windy",
+  "start": 3.697,
+  "end": 4.198
+ },
+ {
+  "word": "tomorrow",
+  "start": 4.338,
+  "end": 4.866
+ },
+ {
+  "word": "morning",
+  "start": 5.006,
+  "end": 5.548
+ },
+ {
+  "word": "please",
+  "start": 6.248,
+  "end": 6.76
+ },
+ {
+  "word": "bring",
+  "start": 6.9,
+  "end": 7.345
+ },
+ {
+  "word": "a",
+  "start": 7.485,
+  "end": 7.809
+ },
+ {
+  "word": "warm",
+  "start": 7.949,
+  "end": 8.469
+ },
+ {
+  "word": "coat",
+  "start": 8.609,
+  "end": 9.003
+ },
+ {
+  "word": "and",
+  "start": 9.143,
+  "end": 9.552
+ },
+ {
+  "word": "an",
+  "start": 9.692,
+  "end": 10.072
+ },
+ {
+  "word": "umbrella",
+  "start": 10.212,
+  "end": 10.753
+ },
+ {
+  "word": "the",
+  "start": 11.453,
+  "end": 11.757
+ },
+ {
+  "word": "meeting",
+  "start": 11.897,
+  "end": 12.399
+ },
+ {
+  "word": "starts",
+  "start": 12.539,
+  "end": 13.154
+ },
+ {
+  "word": "at",
+  "start": 13.294,
+  "end": 13.624
+ },
+ {
+  "word": "nine",
+  "start": 13.764,
+  "end": 14.275
+ },
+ {
+  "word": "in",
+  "start": 14.415,
+  "end": 14.752
+ },
+ {
+  "word": "the",
+  "start": 14.892,
+  "end": 15.196
+ },
+ {
+  "word": "main",
+  "start": 15.336,
+  "end": 15.839
+ },
+ {
+  "word": "hall",
+  "start": 15.979,
+  "end": 16.408
+ }
+]
