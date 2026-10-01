@@ -110,15 +110,27 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
-        if length == 0:
+    # The API's JSON bodies are a few KB; uploads use their own streaming path.
+    _MAX_JSON_BODY = 1 << 20
+
+    def _read_body(self) -> dict | None:
+        """The JSON object sent ({} if missing or not an object), or None
+        if the body is too large to read."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
             return {}
+        if length > self._MAX_JSON_BODY:
+            self.close_connection = True      # leave it unread
+            return None
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
+        return data if isinstance(data, dict) else {}
 
     def _handle_upload(self):
         """Receive multipart file upload and save to temp dir."""
@@ -380,6 +392,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             return
 
         body = self._read_body()
+        if body is None:
+            self._send_json({"error": "Request body too large"}, 413)
+            return
 
         if path == "/api/run":
             result = self._start_pipeline(body)

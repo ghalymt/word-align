@@ -327,6 +327,11 @@ function storeJobId(jobId) {
 function clearStoredJob() {
   try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch(e) {}
 }
+function esc(value) {
+  // For the few places that build markup from server data.
+  return String(value ?? '').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 function appendLog(message, kind='i') {
   const log = document.getElementById('log');
   const item = document.createElement('div');
@@ -460,9 +465,9 @@ async function loadEngines() {
     yamnet:'Sound event detection · [music] [laughs]'};
   container.innerHTML = data.engines.map(e => `
     <div class="engine-row">
-      <div><div class="en">${names[e.id]||e.name}</div><div class="em">${descs[e.id]||''}</div></div>
+      <div><div class="en">${esc(names[e.id]||e.name)}</div><div class="em">${esc(descs[e.id]||'')}</div></div>
       <span style="font-size:11px;margin-right:8px;color:${e.ready?'var(--green)':'var(--amber)'}">${e.ready?'✔ Ready':'⚠ Not installed'}</span>
-      <label class="tgl"><input type="checkbox" data-engine-id="${e.id}" data-ready="${e.ready}" ${e.ready?'checked':''} onchange="updateRunBtn()"><span class="s"></span></label>
+      <label class="tgl"><input type="checkbox" data-engine-id="${esc(e.id)}" data-ready="${!!e.ready}" ${e.ready?'checked':''} onchange="updateRunBtn()"><span class="s"></span></label>
     </div>
   `).join('');
   applyPreset(preset);
@@ -577,19 +582,18 @@ async function startPipeline() {
   document.getElementById('progress').style.display = 'block';
   document.getElementById('output-section').style.display = 'none';
   const log = document.getElementById('log');
-  log.innerHTML = '<div class="i">Uploading files...</div>\n';
-  log.scrollTop = log.scrollHeight;
+  log.replaceChildren();
+  appendLog('Uploading files...');
 
   // Upload files to server first
   const paths = await uploadFiles();
   if (!paths?.audio_temp) {
-    log.innerHTML += '<div class="e">Upload failed. Check that the backend server is running.</div>\n';
+    appendLog('Upload failed. Check that the backend server is running.', 'e');
     running = false;
     document.getElementById('run-btn').disabled = false;
     return;
   }
-  log.innerHTML += '<div class="ok">Files uploaded. Starting pipeline...</div>\n';
-  log.scrollTop = log.scrollHeight;
+  appendLog('Files uploaded. Starting pipeline...', 'ok');
 
   const engineFlags = getEngineFlags();
   const body = {
@@ -629,7 +633,7 @@ async function startPipeline() {
   })();
 
   if (!result?.job_id) {
-    log.innerHTML += `<div class="e">Failed to start pipeline: ${result?.error || 'Unknown error'}</div>\n`;
+    appendLog(`Failed to start pipeline: ${result?.error || 'Unknown error'}`, 'e');
     running = false;
     document.getElementById('run-btn').disabled = false;
     return;
@@ -646,15 +650,19 @@ function cancelPipeline() {
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({job_id: currentJobId})
   });
-  document.getElementById('log').innerHTML += '<div class="w">Cancellation requested.</div>\n';
+  appendLog('Cancellation requested.', 'w');
 }
 
 function showOutput(files) {
   if (!files?.length) return;
   document.getElementById('output-section').style.display = 'block';
-  document.getElementById('output-files').innerHTML = files.map(f =>
-    `<div class="file">${f}</div>`
-  ).join('');
+  // Paths are text, not markup: a file name may contain < or &.
+  document.getElementById('output-files').replaceChildren(...files.map(f => {
+    const item = document.createElement('div');
+    item.className = 'file';
+    item.textContent = f;
+    return item;
+  }));
 }
 
 // Init
