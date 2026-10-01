@@ -537,6 +537,10 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 profile_overrides["max_cpl"] = int(params["max_cpl"])
             if "use_tags" in params:
                 profile_overrides["tags"] = bool(params["use_tags"])
+            formats = tuple(f for f in (params.get("formats") or ["srt"])
+                            if f in ("srt", "vtt", "ass")) or ("srt",)
+            if "formats" in params:
+                profile_overrides["formats"] = formats
             output_dir = Path.home() / "WordAlign" / "outputs" / job_id
             cfg = PipelineConfig(
                 audio_path=audio_path,
@@ -552,6 +556,7 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 use_legacy_ensemble=params.get("use_legacy_ensemble", False),
                 max_cpl=int(params.get("max_cpl", 42)),
                 max_lines=int(params.get("max_lines", 2)),
+                subtitle_formats=formats,
                 use_tags=params.get("use_tags", False),
                 punctuation=params.get("punctuation", False),
                 qa=params.get("qa", False),
@@ -578,15 +583,7 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 for issue in result.qa_issues:
                     data = issue.to_dict() if hasattr(issue, "to_dict") else dict(issue)
                     store.save_qa_issue(job_id, data)
-            output_files = [p for p in [
-                result.word_level_srt_path,
-                result.sentence_level_srt_path,
-                result.transcript_txt_path,
-                result.transcript_docx_path,
-                result.audio_tags_srt_path,
-                result.combined_srt_path,
-                result.job_manifest_path,
-            ] if p]
+            output_files = result.output_files
             status = "cancelled" if result.cancelled else "completed"
             if status == "cancelled":
                 shutil.rmtree(output_dir, ignore_errors=True)

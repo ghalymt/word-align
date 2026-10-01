@@ -92,5 +92,22 @@ class PipelineResult:
     warnings: list[str] = field(default_factory=list)
     qa_issues: list[Any] = field(default_factory=list)
     job_manifest_path: Optional[str] = None
+    sentence_level_vtt_path: Optional[str] = None
+    sentence_level_ass_path: Optional[str] = None
     error: Optional[str] = None
     cancelled: bool = False
+
+    @property
+    def output_files(self) -> list[str]:
+        """Every file this run wrote, in a stable order."""
+        return [p for p in (
+            self.word_level_srt_path,
+            self.sentence_level_srt_path,
+            self.sentence_level_vtt_path,
+            self.sentence_level_ass_path,
+            self.transcript_txt_path,
+            self.transcript_docx_path,
+            self.audio_tags_srt_path,
+            self.combined_srt_path,
+            self.job_manifest_path,
+        ) if p]

@@ -227,6 +227,8 @@ class PipelineConfig:
     device: Optional[str] = None               # None -> cuda if available
     doc_format: str = "txt"                    # ensemble transcript: none/txt/docx/both
     doc_timestamps: bool = True                # [HH:MM:SS] paragraph prefixes
+    # Sentence-level subtitle files to write: any of "srt", "vtt", "ass".
+    subtitle_formats: tuple = ("srt",)
     # Subtitle layout (per-line CPL x line count). 42x2 suits regular video,
     # 32x2 suits vertical/social. max_duration_ms caps a cue's on-screen time.
     max_cpl: int = 42
