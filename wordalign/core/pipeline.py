@@ -25,10 +25,11 @@ from ..align import (interpolate_timestamps, make_surgical_mfa,
                      match_timestamps, print_alignment_statistics)
 from ..config import PipelineConfig
 from ..ensemble import build_consensus
-from ..segment import (balance_block_enhanced, enforce_min_duration,
+from ..segment import (enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
                        resolve_overlaps, run_iterative_merging,
-                       set_config, validate_srt_output)
+                       set_config, validate_srt_output,
+                       balance_block_enhanced)
 
 from ..utils import (detect_language, extract_tags_from_transcript,
                      get_audio_duration, normalize_word, strip_tags,
