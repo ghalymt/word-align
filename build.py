@@ -4,6 +4,10 @@
 Usage:
     python build.py            # builds dist/WordAlign/ (folder)
     python build.py --zip      # also creates dist/WordAlign-portable.zip
+                               # (app only; models are downloaded separately)
+    python build.py --zip --zip-with-models
+                               # full offline bundle (tens of GB; too big
+                               # for a GitHub release asset)
 
 Requirements:
     pip install pyinstaller
@@ -126,18 +130,59 @@ def copy_extra_files(dist_dir: Path, include_models: bool = True,
         shutil.copytree(src_models, dst_models, dirs_exist_ok=True)
 
 
-def make_zip(dist_dir: Path) -> Path:
-    """Zip the bundle for distribution."""
+# GitHub rejects release assets of 2 GiB or more.
+GITHUB_ASSET_LIMIT = 2 * 1024 ** 3
+
+MODELS_README = """\
+WordAlign -- getting the models
+===============================
+
+This download contains the application only. The speech models are large
+(hundreds of MB to several GB each) and are installed separately into the
+models\\ folder next to WordAlign.exe:
+
+  models\\vosk\\        Vosk models (CPU), e.g. vosk-model-en-us-0.22
+                        https://alphacephei.com/vosk/models
+  models\\whisper\\     faster-whisper / WhisperX models (GPU)
+  models\\huggingface\\ Hugging Face cache (Qwen3-ASR, alignment models)
+  models\\mfa\\         Montreal Forced Aligner models
+                        (mfa model download acoustic|g2p <name>)
+  models\\llm\\         GGUF model for smart punctuation (optional)
+
+Start WordAlign and open Settings -> Model Paths: it shows which models it
+found, and every path can point somewhere else (for example a shared drive).
+Engines whose models are missing are skipped automatically.
+"""
+
+
+def make_zip(dist_dir: Path, include_models: bool = False) -> Path:
+    """Zip the bundle for distribution.
+
+    The models/ tree is left out unless *include_models*: it is tens of GB,
+    far over GitHub's 2 GiB release-asset limit, and users install the
+    models they need separately (MODELS.txt in the ZIP says how).
+    """
     zip_path = ROOT / "dist" / "WordAlign-portable.zip"
     if dist_dir.is_dir():
-        files = [f for f in dist_dir.rglob("*") if f.is_file()]
+        models_dir = dist_dir / "models"
+        files = [f for f in dist_dir.rglob("*") if f.is_file()
+                 and (include_models or models_dir not in f.parents)]
     else:
         files = [dist_dir]
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in files:
             zf.write(file, file.name if dist_dir.is_file()
                      else file.relative_to(dist_dir.parent))
-    print(f"    -> {zip_path} ({zip_path.stat().st_size / 1e6:.1f} MB)")
+        if not include_models:
+            top = dist_dir.name if dist_dir.is_dir() else ""
+            zf.writestr(f"{top}/MODELS.txt" if top else "MODELS.txt",
+                        MODELS_README)
+    size = zip_path.stat().st_size
+    print(f"    -> {zip_path} ({size / 1e6:.1f} MB"
+          f"{', models included' if include_models else ', models excluded'})")
+    if size >= GITHUB_ASSET_LIMIT:
+        print("    [warn] The ZIP is over GitHub's 2 GiB release-asset limit; "
+              "build the release without --zip-with-models.")
     return zip_path
 
 
@@ -151,13 +196,16 @@ def main() -> None:
                         help="copy models/ instead of creating a junction")
     parser.add_argument("--zip-only", action="store_true",
                         help="create the ZIP from an existing dist/WordAlign bundle")
+    parser.add_argument("--zip-with-models", action="store_true",
+                        help="put models/ in the ZIP too (offline bundle; "
+                             "too large for a GitHub release)")
     args = parser.parse_args()
 
     if args.zip_only:
         dist_dir = ROOT / "dist" / "WordAlign"
         if not dist_dir.exists():
             raise FileNotFoundError(f"Build output missing: {dist_dir}")
-        make_zip(dist_dir)
+        make_zip(dist_dir, include_models=args.zip_with_models)
         return
 
     check_requirements()
@@ -172,7 +220,7 @@ def main() -> None:
     print(f"    bundle size: {total / 1e6:.1f} MB")
     if args.zip:
         print("[3/3] Creating ZIP ...")
-        make_zip(dist_dir)
+        make_zip(dist_dir, include_models=args.zip_with_models)
     else:
         print("[3/3] Skipping ZIP (use --zip to create one)")
     print(f"\n[ok] Done. Bundle at: {dist_dir}")
