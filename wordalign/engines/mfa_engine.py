@@ -214,7 +214,8 @@ class MFAWrapper:
                self._get_model_path("g2p", model_name),
                str(output_dict_path), "--clean", "--num_jobs", "4"]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, text=True, env=self.env)
+                       stderr=subprocess.PIPE, encoding="utf-8",
+                       errors="replace", env=self.env)
         return output_dict_path
 
     def run_alignment(self, dictionary_path: str,
@@ -228,7 +229,8 @@ class MFAWrapper:
                "--output_format", "long_textgrid",
                "--num_jobs", "4", "--single_speaker"]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, text=True, env=self.env)
+                       stderr=subprocess.PIPE, encoding="utf-8",
+                       errors="replace", env=self.env)
 
     def cleanup(self) -> None:
         shutil.rmtree(self.work_dir, ignore_errors=True)

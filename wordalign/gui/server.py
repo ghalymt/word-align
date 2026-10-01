@@ -299,7 +299,7 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             profiles = []
             for f in profiles_dir.glob("*.json"):
                 try:
-                    with open(f) as fh:
+                    with open(f, encoding="utf-8") as fh:
                         data = json.load(fh)
                     profiles.append({"name": data.get("name", f.stem), "file": f.name, "data": data})
                 except Exception:

@@ -101,8 +101,13 @@ def run_qwen(audio_path: str,
         args += ["--models-dir", models_dir]
 
     try:
+        # UTF-8 both ways: on Windows a piped child otherwise writes cp1252
+        # and dies on the first non-Latin path or log line, and the parent
+        # would mis-decode whatever it did write.
         proc = subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace",
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
         while True:
             try:
                 stdout, stderr = proc.communicate(timeout=0.25)

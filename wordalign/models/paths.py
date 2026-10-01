@@ -289,7 +289,11 @@ def _default_llm_model_path() -> Optional[str]:
     llm_dir = _project_models_root() / "llm"
     if not llm_dir.exists():
         return None
-    ggufs = sorted(llm_dir.glob("*.gguf"), key=lambda p: p.stat().st_size, reverse=True)
+    # MTP draft models and multimodal projectors live in the same folder but
+    # are never the main model, however large they are.
+    ggufs = sorted((p for p in llm_dir.glob("*.gguf")
+                    if not p.name.startswith("mtp-") and "mmproj" not in p.name),
+                   key=lambda p: p.stat().st_size, reverse=True)
     return str(ggufs[0]) if ggufs else None
 
 

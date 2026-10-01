@@ -332,8 +332,11 @@ class LlamaCppRestorer:
             cmd += ["--spec-type", "draft-mtp", "-md", self.mtp_model]
 
         try:
+            # llama-cli writes UTF-8. The locale default (cp1252 on Windows)
+            # garbles accented text and raises on undefined bytes.
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600)
+                cmd, capture_output=True, encoding="utf-8", errors="replace",
+                timeout=600)
         except (OSError, subprocess.TimeoutExpired) as exc:
             if self.verbose:
                 print(f"[punctuation] llama-cli failed ({exc}); using rules.")
