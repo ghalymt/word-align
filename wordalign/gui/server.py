@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -121,52 +121,26 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             return {}
 
     def _handle_upload(self):
-        """Receive multipart file upload and save to temp dir."""
+        """Receive a multipart upload, streaming each file to a temp dir."""
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
             self._send_json({"error": "Expected multipart upload"}, 400)
             return
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length)
-        boundary = content_type.split("boundary=")[1].strip() if "boundary=" in content_type else ""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        boundary = content_type.split("boundary=")[1].strip().strip('"') \
+            if "boundary=" in content_type else ""
         if not boundary:
             self._send_json({"error": "No boundary"}, 400)
             return
-        boundary_bytes = ("--" + boundary).encode()
-        parts = raw.split(boundary_bytes)
         import tempfile
         upload_dir = tempfile.mkdtemp(prefix="wordalign_upload_")
-        saved_files = []
-        for part in parts:
-            if b"Content-Disposition" not in part:
-                continue
-            header_end = part.find(b"\r\n\r\n")
-            if header_end == -1:
-                continue
-            header = part[:header_end].decode(errors="replace")
-            file_data = part[header_end + 4:]
-            # Each part ends with exactly one CRLF before the next
-            # "--boundary". Strip only that: rstrip(b"\r\n-") also ate any
-            # trailing CR/LF/'-' bytes that belong to the file itself.
-            if file_data.endswith(b"\r\n"):
-                file_data = file_data[:-2]
-            fname = "uploaded_file"
-            for line in header.split("\r\n"):
-                for h in line.split(";"):
-                    h = h.strip()
-                    if h.lower().startswith("filename="):
-                        fname = h.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-                if fname != "uploaded_file":
-                    break
-            safe_name = os.path.basename(fname).strip() or "uploaded_file"
-            dest = os.path.join(upload_dir, safe_name)
-            if os.path.exists(dest):
-                stem, ext = os.path.splitext(safe_name)
-                dest = os.path.join(upload_dir, f"{stem}_{len(saved_files)}{ext}")
-            with open(dest, "wb") as f:
-                f.write(file_data)
-            saved_files.append(dest)
+        try:
+            saved_files = _stream_multipart(self.rfile, length,
+                                            boundary.encode(), upload_dir)
+        except ValueError as exc:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            self._send_json({"error": f"Malformed upload: {exc}"}, 400)
+            return
         if not saved_files:
             shutil.rmtree(upload_dir, ignore_errors=True)
         upload_id = uuid.uuid4().hex if saved_files else None
@@ -631,6 +605,104 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Suppress default HTTP logging
         pass
+
+
+_UPLOAD_CHUNK = 1 << 20           # bytes read from the socket at a time
+_MAX_PART_HEADER = 16 * 1024
+
+
+def _upload_filename(header: str) -> Optional[str]:
+    """Safe file name from a part's Content-Disposition, or None (no file)."""
+    for line in header.split("\r\n"):
+        if not line.lower().startswith("content-disposition"):
+            continue
+        for item in line.split(";"):
+            key, _, value = item.strip().partition("=")
+            if key.lower() == "filename":
+                # Browsers may send a full client path (C:\fakepath\x.wav).
+                name = value.strip().strip('"').strip("'").replace("\\", "/")
+                name = os.path.basename(name).strip()
+                return name if name not in ("", ".", "..") else "uploaded_file"
+    return None
+
+
+def _stream_multipart(rfile, length: int, boundary: bytes,
+                      upload_dir: str) -> list:
+    """Parse a multipart/form-data body from *rfile*, writing file parts to
+    *upload_dir* as they arrive. Returns the saved paths.
+
+    The previous parser read the whole request into memory (a long video is
+    gigabytes) and then split it; this one only ever holds one chunk plus
+    a boundary's worth of look-behind.
+    """
+    delimiter = b"--" + boundary
+    separator = b"\r\n" + delimiter       # what ends every part's body
+    remaining = length
+    buf = b""
+    saved: list = []
+
+    def fill() -> bool:
+        nonlocal remaining, buf
+        if remaining <= 0:
+            return False
+        chunk = rfile.read(min(_UPLOAD_CHUNK, remaining))
+        if not chunk:
+            remaining = 0
+            return False
+        remaining -= len(chunk)
+        buf += chunk
+        return True
+
+    while delimiter not in buf:                 # skip any preamble
+        if not fill():
+            raise ValueError("no multipart boundary in the body")
+        buf = buf[-(len(delimiter) + _UPLOAD_CHUNK):]
+    buf = buf[buf.index(delimiter) + len(delimiter):]
+
+    while True:
+        while len(buf) < 2 and fill():
+            pass
+        if buf.startswith(b"--"):               # closing delimiter
+            break
+        if buf.startswith(b"\r\n"):
+            buf = buf[2:]
+        while b"\r\n\r\n" not in buf:
+            if len(buf) > _MAX_PART_HEADER or not fill():
+                raise ValueError("incomplete part header")
+        header, buf = buf.split(b"\r\n\r\n", 1)
+        name = _upload_filename(header.decode("utf-8", errors="replace"))
+        out = None
+        if name is not None:
+            dest = os.path.join(upload_dir, name)
+            if os.path.exists(dest):
+                stem, ext = os.path.splitext(name)
+                dest = os.path.join(upload_dir, f"{stem}_{len(saved)}{ext}")
+            out = open(dest, "wb")
+        try:
+            while True:
+                idx = buf.find(separator)
+                if idx != -1:
+                    if out:
+                        out.write(buf[:idx])
+                    buf = buf[idx + len(separator):]
+                    break
+                # Keep a possible partial separator for the next chunk.
+                keep = len(separator) - 1
+                if len(buf) > keep:
+                    if out:
+                        out.write(buf[:-keep])
+                    buf = buf[-keep:]
+                if not fill():
+                    raise ValueError("upload ended inside a file")
+        finally:
+            if out:
+                out.close()
+        if out:
+            saved.append(dest)
+    # Drain anything after the closing delimiter so the socket stays usable.
+    while remaining > 0 and fill():
+        buf = b""
+    return saved
 
 
 def run_server(port: int = 5575, host: str = "127.0.0.1", open_browser: bool = True):
