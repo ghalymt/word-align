@@ -1,4 +1,4 @@
-# WordAlign 2.0
+# WordAlign 2.1
 
 **Speech-to-subtitle alignment & transcription, for humans and machines.**
 
@@ -18,18 +18,27 @@ The GUI runs in your browser (auto-opened), with **dark mode by default** — to
 
 ---
 
-## ✨ What's New in 2.0
+## ✨ What's New in 2.1
+
+- **🎬 SRT, WebVTT and ASS** — `--formats srt,vtt,ass` (or the GUI toggles); ASS keeps the job's own line layout for burn-in.
+- **🗣️ Speaker labels** — `--diarize` (pyannote.audio): cues never mix speakers; names appear as VTT voices, the ASS Name field, an SRT prefix and transcript paragraphs.
+- **📁 Batch mode** — `--batch FOLDER` subtitles a whole folder, pairing `talk.mp4` with `talk.txt`/`talk.srt`, with a JSON report.
+- **📐 Up to N lines per cue** — `--max-lines 3` (or more) now really lays cues out on three lines; `--max-lines 1` never adds a break.
+- **🔁 Job queue & recovery** — GUI jobs run one at a time (GPU engines never load two models at once), and jobs interrupted by a shutdown are marked as such and can be re-run from the stage cache.
+- **🌍 Honest MFA** — skipped, with a warning, for a language it has no model for, instead of aligning with the English model.
+- **🔒 Safer GUI server** — other websites can no longer drive or read the local API, and uploads stream to disk.
+- **✅ Accuracy tests in CI** — golden-file tests plus a real-audio timing check on every pull request.
+
+Upgrading from 2.0? A few defaults changed — see the [upgrade notes in the changelog](CHANGELOG.md#upgrade-notes-behaviour-changes).
+
+### The 2.0 foundations
 
 - **🖥️ Web GUI** — drag-and-drop files, pick a quality preset, click Run. Real progress bar, live log, cancel button. Opens in your default browser; no install beyond the app itself.
 - **🌙 Dark mode** — default theme, one-click toggle.
 - **🧠 Smart Transcript Review** — restores **punctuation and capitalization** (a local LLM such as Gemma via llama.cpp, with a rule-based fallback; a cue the LLM rewords is never accepted), and an optional QA pass flags repeated phrases, timing anomalies, long untimed stretches and low-agreement words.
-- **🎬 SRT, WebVTT and ASS** — `--formats srt,vtt,ass`; ASS keeps the job's own line layout for burn-in.
-- **🗣️ Speaker labels** — `--diarize` (pyannote.audio): cues never mix speakers; names appear as VTT voices, the ASS Name field, an SRT prefix and transcript paragraphs.
-- **📁 Batch mode** — `--batch FOLDER` subtitles a whole folder, pairing `talk.mp4` with `talk.txt`/`talk.srt`, with a JSON report.
 - **🧩 Plugin engine architecture** — adding a new ASR/alignment engine is a drop-in plugin. No core edits, no CLI edits, no GUI edits.
 - **📦 Model Manager** — auto-detects your installed models (Vosk, Whisper, Hugging Face cache, MFA) and every model path is configurable. No surprise downloads.
-- **🌍 MFA for 65+ languages** — mapped to Montreal Forced Aligner pretrained models for surgical gap-filling; skipped (never faked with English) for a language it has no model for.
-- **🔁 Job queue & recovery** — GUI jobs run one at a time (GPU engines never load two models at once), and jobs interrupted by a shutdown are marked as such and can be re-run from the stage cache.
+- **🌍 MFA for 65+ languages** — mapped to Montreal Forced Aligner pretrained models for surgical gap-filling.
 - **📊 Manifest & cache** — fingerprint-based stage caching (re-runs skip the engines), a JSON job manifest with timing-source statistics, SQLite job history.
 
 ---
@@ -312,4 +321,4 @@ The resulting `Launch WordAlign.vbs` starts the local GUI without requiring Pyth
 
 ## 🤝 Contributing
 
-See [docs/developer.md](docs/developer.md) for the plugin API, [docs/architecture.md](docs/architecture.md) for internals, and [docs/user_guide.md](docs/user_guide.md) for detailed usage.
+Release history is in [CHANGELOG.md](CHANGELOG.md). See [docs/developer.md](docs/developer.md) for the plugin API, [docs/architecture.md](docs/architecture.md) for internals, and [docs/user_guide.md](docs/user_guide.md) for detailed usage.
