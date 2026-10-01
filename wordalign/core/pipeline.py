@@ -127,6 +127,25 @@ class PipelineRunner:
             elif name == "mfa":
                 self.config.use_mfa = bool(value)
 
+    @staticmethod
+    def _has_content(payload) -> bool:
+        """True if *payload* holds at least one real value.
+
+        Engines return ``[]`` / ``([], [])`` on failure or cancel, so an
+        empty list, an empty dict, or a container of only empty containers
+        all count as "nothing worth caching".
+        """
+        if payload is None:
+            return False
+        if isinstance(payload, (list, tuple)):
+            return any(PipelineRunner._has_content(item) for item in payload)
+        if isinstance(payload, dict):
+            return any(PipelineRunner._has_content(v) for v in payload.values())
+        return True
+
+    def _cancelled(self) -> bool:
+        return self.ctx.cancel_requested or self.ctx.cancel_event.is_set()
+
     def _cached_engine(self, plugin_id: str, model_id: Optional[str],
                        language: str, settings: dict, loader):
         try:
@@ -137,13 +156,18 @@ class PipelineRunner:
                 fingerprint_audio(self.config.audio_path), plugin_id, "2.0",
                 model_id, None, language, settings)
             cached = cache.get(key)
-            if cached is not None:
+            # An empty entry is a failed/cancelled run written by an older
+            # version; treat it as a miss so the engine actually runs.
+            if self._has_content(cached):
                 return cached, True
         except Exception:
             key = None
             cache = None
         output = loader()
-        if cache is not None and key is not None:
+        # Never cache a failed run (empty) or a cancelled one (possibly
+        # partial): later runs would replay it instead of calling the engine.
+        if (cache is not None and key is not None
+                and self._has_content(output) and not self._cancelled()):
             try:
                 cache.put(key, output)
             except Exception:
