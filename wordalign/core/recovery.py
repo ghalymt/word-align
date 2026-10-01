@@ -57,19 +57,30 @@ class CrashRecovery:
     def __init__(self, store: Optional[ProjectStore] = None):
         self.store = store or ProjectStore()
 
-    def find_incomplete_jobs(self, stale_after_seconds: Optional[float] = None) -> RecoveryReport:
-        """Scan for jobs stuck in pending/running state."""
+    def find_incomplete_jobs(self, stale_after_seconds: Optional[float] = None,
+                             exclude_job_ids=()) -> RecoveryReport:
+        """Scan for jobs that did not finish.
+
+        ``interrupted`` jobs (marked at server start) always count. Jobs
+        still ``pending``/``running`` count once stale, except those in
+        *exclude_job_ids* -- the caller's live jobs, which may simply be
+        long-running.
+        """
+        exclude = set(exclude_job_ids)
         stale_after = stale_after_seconds or self.STALE_AFTER_SECONDS
         report = RecoveryReport()
         now = time.time()
 
         for project in self.store.list_projects(limit=200):
             for job in self.store.list_jobs(project.id):
-                if job.status not in ("pending", "running"):
+                if job.id in exclude:
+                    continue
+                if job.status not in ("pending", "queued", "running",
+                                      "interrupted"):
                     continue
                 started = job.started_at or now
                 age = now - started
-                if age < stale_after:
+                if job.status != "interrupted" and age < stale_after:
                     # Too fresh to be a crash — might still be running
                     continue
 

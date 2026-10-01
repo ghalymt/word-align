@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS jobs (
     id          TEXT PRIMARY KEY,
     project_id  TEXT NOT NULL REFERENCES projects(id),
-    status      TEXT DEFAULT 'pending',   -- pending|running|completed|failed|cancelled
+    status      TEXT DEFAULT 'pending',   -- pending|queued|running|completed|failed|cancelled|interrupted
     profile     TEXT DEFAULT '{}',
     started_at  REAL,
     completed_at REAL,
@@ -268,6 +268,27 @@ class ProjectStore:
         vals.append(job_id)
         conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", vals)
         conn.commit()
+
+    def mark_interrupted_jobs(self) -> int:
+        """Mark jobs a previous server process left unfinished.
+
+        Called once at server start, before any job can be running: a job
+        still pending/queued/running then belongs to a process that is gone,
+        and would otherwise stay "running" forever (and the GUI would poll
+        it forever). Returns how many jobs were marked.
+        """
+        conn = self._get_conn()
+        now = time.time()
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'interrupted', completed_at = ?, "
+            "error = COALESCE(error, 'Interrupted: WordAlign stopped before "
+            "this job finished. Run it again to resume from the stage cache.') "
+            "WHERE status IN ('pending', 'queued', 'running')", (now,))
+        conn.execute(
+            "UPDATE stages SET status = 'interrupted', completed_at = ? "
+            "WHERE status IN ('pending', 'running')", (now,))
+        conn.commit()
+        return cur.rowcount or 0
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         conn = self._get_conn()

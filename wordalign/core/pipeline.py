@@ -146,6 +146,40 @@ class PipelineRunner:
             return any(PipelineRunner._has_content(v) for v in payload.values())
         return True
 
+    # Engines that load a model onto the GPU. Only one runs at a time in the
+    # process (WORDALIGN_GPU_SLOTS), so concurrent jobs queue for the GPU
+    # instead of running out of memory; CPU stages still overlap.
+    _GPU_ENGINES = frozenset({"whisperx", "qwen"})
+
+    @contextmanager
+    def _gpu_slot(self, plugin_id: str):
+        if (plugin_id not in self._GPU_ENGINES
+                or (self.config.device or "").lower() == "cpu"):
+            yield
+            return
+        from .gpu_scheduler import shared_scheduler
+        scheduler = shared_scheduler()
+        slot = None
+        announced = False
+        while slot is None:
+            try:
+                slot = scheduler.acquire(plugin_id, timeout_seconds=0.5)
+            except TimeoutError:
+                # Only a cancel that arrives *while waiting* aborts here; a
+                # free slot is taken and the engine handles cancellation.
+                if self._cancelled():
+                    raise PipelineCancelled(
+                        f"Cancelled while waiting for the GPU ({plugin_id})")
+                if not announced:
+                    self._emit(StageMessage(
+                        stage=plugin_id,
+                        message="Waiting for the GPU (another job is using it)..."))
+                    announced = True
+        try:
+            yield
+        finally:
+            scheduler.release(slot)
+
     def _cancelled(self) -> bool:
         return self.ctx.cancel_requested or self.ctx.cancel_event.is_set()
 
@@ -166,7 +200,8 @@ class PipelineRunner:
         except Exception:
             key = None
             cache = None
-        output = loader()
+        with self._gpu_slot(plugin_id):
+            output = loader()
         # Never cache a failed run (empty) or a cancelled one (possibly
         # partial): later runs would replay it instead of calling the engine.
         if (cache is not None and key is not None
