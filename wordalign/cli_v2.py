@@ -147,6 +147,14 @@ def _parse_args(argv=None) -> PipelineConfig:
                         "(default: mtp-*.gguf in <project>/models/llm/, or set WORDALIGN_LLM_MTP_MODEL)")
     p.add_argument("--no-mtp", action="store_true",
                    help="disable multi-token prediction draft model")
+    p.add_argument("--batch", metavar="FOLDER",
+                   help="process every media file in FOLDER (transcripts are "
+                        "paired by name: talk.mp4 + talk.txt/.srt); all other "
+                        "flags apply to every file")
+    p.add_argument("--recursive", action="store_true",
+                   help="with --batch: include subfolders")
+    p.add_argument("--skip-existing", action="store_true",
+                   help="with --batch: skip files whose subtitles already exist")
     p.add_argument("--gui", action="store_true",
                    help="start the GUI backend server instead of running CLI")
     p.add_argument("--port", type=int, default=5575,
@@ -160,7 +168,7 @@ def _parse_args(argv=None) -> PipelineConfig:
         run_server(port=a.port)
         sys.exit(0)
     if not a.audio:
-        p.error("audio is required unless --gui is used")
+        p.error("audio is required unless --gui or --batch is used")
 
     from .models.paths import ModelPaths
     # Build the ModelPaths only with the values the user explicitly
@@ -300,8 +308,19 @@ def main(argv=None) -> int:
         from .gui.server import run_server
         run_server(port=int(os.environ.get("WORDALIGN_PORT", "5575")))
         return 0
+    if "--gui" not in args:
+        from .batch import batch_requested, run_batch
+        if batch_requested(args):
+            print(f"WORD-ALIGN v{__version__}")
+            return run_batch(args, _run_one, _parse_args)
     cfg = _parse_args(args)
     print(f"WORD-ALIGN v{__version__}")
+    result = _run_one(cfg)
+    return 0 if result.output_files else 1
+
+
+def _run_one(cfg: PipelineConfig):
+    """Run the pipeline for one file, printing progress and its outputs."""
     print(f"Audio: {cfg.audio_path}")
     if cfg.transcript_path:
         print(f"Transcript: {cfg.transcript_path}")
@@ -321,10 +340,9 @@ def main(argv=None) -> int:
             if p:
                 print(f"  → {p}")
         print("=" * 60)
-        return 0
     else:
         print(f"\n[error] {result.error or 'Pipeline produced no output.'}")
-        return 1
+    return result
 
 
 if __name__ == "__main__":
