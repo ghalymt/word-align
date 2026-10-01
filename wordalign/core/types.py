@@ -41,6 +41,7 @@ class SegmentResult:
     start_source: Optional[str] = None    # timing source of start boundary
     end_source: Optional[str] = None      # timing source of end boundary
     issues: list[str] = field(default_factory=list)  # issue IDs overlapping
+    speaker: Optional[str] = None         # "Speaker 1"... when diarized
 
 
 @dataclass
