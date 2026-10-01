@@ -75,6 +75,7 @@ class PipelineRunner:
         self.cancelled = False
         self._stage_durations: Dict[str, float] = {}
         self._warnings: List[str] = []
+        self._errors: List[str] = []
         self._primary_attempted: set = set()
         self._apply_profile()
 
@@ -245,6 +246,7 @@ class PipelineRunner:
             self._warnings.append(f"{event.stage}: {event.message}")
         elif isinstance(event, ErrorEvent):
             self._warnings.append(f"{event.stage}: {event.message}")
+            self._errors.append(event.message)
         self.sink.emit(event)
 
     def _check_cancel(self, stage: str = "") -> None:
@@ -255,6 +257,7 @@ class PipelineRunner:
         self._start_time = time.time()
         self._stage_durations.clear()
         self._warnings.clear()
+        self._errors.clear()
         self.cancelled = False
         if not self.ctx.cancel_requested:
             self.ctx.cancel_event.clear()
@@ -264,11 +267,19 @@ class PipelineRunner:
             result = PipelineResult(cancelled=True)
             return result
         try:
-            return self._run()
+            result = self._run()
         except PipelineCancelled:
             self.cancelled = True
             self._emit(CancelledEvent(stage=self._cancel_stage))
             return PipelineResult(cancelled=True)
+        # A run that stops early (no audio, no transcript, ...) reports why:
+        # the reason was only emitted as an event, so the GUI job and the
+        # batch report said "no output" without it.
+        if result.error is None and not result.output_files and self._errors:
+            result.error = self._errors[0]
+        if not result.warnings:
+            result.warnings = list(dict.fromkeys(self._warnings))
+        return result
 
     @staticmethod
     @contextmanager
