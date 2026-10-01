@@ -142,7 +142,11 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 continue
             header = part[:header_end].decode(errors="replace")
             file_data = part[header_end + 4:]
-            file_data = file_data.rstrip(b"\r\n-")
+            # Each part ends with exactly one CRLF before the next
+            # "--boundary". Strip only that: rstrip(b"\r\n-") also ate any
+            # trailing CR/LF/'-' bytes that belong to the file itself.
+            if file_data.endswith(b"\r\n"):
+                file_data = file_data[:-2]
             fname = "uploaded_file"
             for line in header.split("\r\n"):
                 for h in line.split(";"):
@@ -516,11 +520,14 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             model_paths = ModelPaths(**{k: v for k, v in mp_dict.items() if v}) \
                           if mp_dict else ModelPaths()
             model_paths._fill_auto()
-            engine_overrides = {
-                name: bool(params[name])
-                for name in ("vosk", "qwen", "whisperx", "mfa")
-                if name in params
-            }
+            # The GUI sends its engine checkboxes as use_<engine>. They are
+            # explicit choices, so they must override the preset's engine
+            # list (bare <engine> keys are accepted for API callers).
+            engine_overrides = {}
+            for name in ("vosk", "qwen", "whisperx", "mfa"):
+                for key in (name, f"use_{name}"):
+                    if key in params:
+                        engine_overrides[name] = bool(params[key])
             profile_value = params.get("profile")
             profile = (PipelineProfile.from_dict(profile_value)
                        if isinstance(profile_value, dict) else None)
