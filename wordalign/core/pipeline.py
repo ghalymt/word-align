@@ -102,6 +102,11 @@ class PipelineRunner:
                 export_overrides["transcript_timestamps"] = bool(overrides["doc_timestamps"])
             if "tags" in overrides:
                 export_overrides["tags"] = bool(overrides["tags"])
+            if "formats" in overrides:
+                formats = set(overrides["formats"])
+                export_overrides.update(sentence_srt="srt" in formats,
+                                        vtt="vtt" in formats,
+                                        ass="ass" in formats)
             export = replace(self.profile.export, **export_overrides)
             self.profile = replace(self.profile, segmentation=segmentation,
                                    export=export)
@@ -191,6 +196,9 @@ class PipelineRunner:
                 transcript_format=cfg.doc_format,
                 transcript_timestamps=cfg.doc_timestamps,
                 tags=cfg.use_tags,
+                sentence_srt="srt" in cfg.subtitle_formats,
+                vtt="vtt" in cfg.subtitle_formats,
+                ass="ass" in cfg.subtitle_formats,
             ),
         )
 
@@ -675,24 +683,45 @@ class PipelineRunner:
                 self._emit(StageMessage(stage="output",
                                         message=f"Word-level SRT: {len(word_entries)} entries -> {path}"))
 
-        if self.profile.export.sentence_srt:
-            if srt is None:
-                self._emit(StageMessage(stage="output", message="srt package not installed; skipping sentence-level SRT", level="warn"))
-            else:
-                sentence_entries = [
-                    srt.Subtitle(i + 1,
-                                 timedelta(seconds=time_to_ms(s["start"]) / 1000),
-                                 timedelta(seconds=time_to_ms(s["end"]) / 1000),
-                                 s["text"])
-                    for i, s in enumerate(segments)]
-                path = f"{base}_sentence_level.srt"
+        export = self.profile.export
+        if srt is not None:
+            sentence_entries = [
+                srt.Subtitle(i + 1,
+                             timedelta(seconds=time_to_ms(s["start"]) / 1000),
+                             timedelta(seconds=time_to_ms(s["end"]) / 1000),
+                             s["text"])
+                for i, s in enumerate(segments)]
+        elif export.sentence_srt or export.vtt or export.ass:
+            self._emit(StageMessage(stage="output", message="srt package not installed; skipping sentence-level subtitles", level="warn"))
+
+        if export.sentence_srt and srt is not None:
+            path = f"{base}_sentence_level.srt"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(srt.compose(sentence_entries))
+            result.sentence_level_srt_path = path
+            self._emit(StageMessage(stage="output",
+                                    message=f"Sentence-level SRT: {len(sentence_entries)} entries -> {path}"))
+        if sentence_entries:
+            from ..subtitle_formats import compose_ass, compose_vtt
+            if export.vtt:
+                path = f"{base}_sentence_level.vtt"
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write(srt.compose(sentence_entries))
-                result.sentence_level_srt_path = path
+                    f.write(compose_vtt(sentence_entries))
+                result.sentence_level_vtt_path = path
                 self._emit(StageMessage(stage="output",
-                                        message=f"Sentence-level SRT: {len(sentence_entries)} entries -> {path}"))
+                                        message=f"Sentence-level WebVTT -> {path}"))
+            if export.ass:
+                path = f"{base}_sentence_level.ass"
+                # BOM: some Windows players misdetect a BOM-less ASS script.
+                with open(path, "w", encoding="utf-8-sig") as f:
+                    f.write(compose_ass(sentence_entries,
+                                        title=os.path.basename(cfg.audio_path)))
+                result.sentence_level_ass_path = path
+                self._emit(StageMessage(stage="output",
+                                        message=f"Sentence-level ASS -> {path}"))
+            if result.sentence_level_srt_path or export.vtt or export.ass:
                 with self._job_layout(seg_cfg):
-                    validate_srt_output(sentence_entries, "Sentence-level SRT")
+                    validate_srt_output(sentence_entries, "Sentence-level subtitles")
 
         self._check_cancel("output")
         if ensemble_conf is not None:
@@ -765,16 +794,7 @@ class PipelineRunner:
                 warnings=self._warnings,
                 word_stats={"total": len(aligned_words),
                             "sources": source_counts},
-                output_files=[
-                    p for p in (
-                        result.word_level_srt_path,
-                        result.sentence_level_srt_path,
-                        result.transcript_txt_path,
-                        result.transcript_docx_path,
-                        result.audio_tags_srt_path,
-                        result.combined_srt_path,
-                    ) if p
-                ],
+                output_files=result.output_files,
             )
         except Exception as exc:
             self._warnings.append(f"manifest: {exc}")
@@ -783,13 +803,7 @@ class PipelineRunner:
         self._emit(StageCompleted(stage="output",
                                   duration_seconds=time.time() - output_t0))
         result.warnings = list(self._warnings)
-        output_files = [p for p in [result.word_level_srt_path,
-                                    result.sentence_level_srt_path,
-                                    result.transcript_txt_path,
-                                    result.transcript_docx_path,
-                                    result.audio_tags_srt_path,
-                                    result.combined_srt_path,
-                                    result.job_manifest_path] if p]
+        output_files = result.output_files
 
         self._check_cancel("output")
         self._emit(PipelineCompleted(

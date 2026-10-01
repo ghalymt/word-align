@@ -113,6 +113,10 @@ def _parse_args(argv=None) -> PipelineConfig:
                    choices=["none", "txt", "docx", "both"], default=None,
                    help="transcript document format in ensemble mode "
                         "(default: txt; docx highlights low-agreement words)")
+    p.add_argument("--formats", default=None, metavar="srt,vtt,ass",
+                   help="sentence-level subtitle formats to write, comma-"
+                        "separated: srt (default), vtt (WebVTT), ass "
+                        "(Advanced SubStation Alpha)")
     p.add_argument("--no-doc-timestamps", action="store_true",
                    help="omit [HH:MM:SS] paragraph timestamps in the "
                         "transcript document")
@@ -212,7 +216,18 @@ def _parse_args(argv=None) -> PipelineConfig:
     if a.use_mfa is not None:
         engine_overrides["mfa"] = a.use_mfa
 
+    formats = ("srt",)
+    if a.formats is not None:
+        formats = tuple(f.strip().lower() for f in a.formats.split(",")
+                        if f.strip())
+        unknown = sorted(set(formats) - {"srt", "vtt", "ass"})
+        if unknown or not formats:
+            p.error(f"--formats: unknown format(s) {', '.join(unknown)}; "
+                    "choose from srt, vtt, ass")
+
     profile_overrides = {}
+    if a.formats is not None:
+        profile_overrides["formats"] = formats
     for name in ("max_cpl", "max_lines", "max_duration_ms", "min_cue_ms"):
         value = getattr(a, name)
         if value is not None:
@@ -247,6 +262,7 @@ def _parse_args(argv=None) -> PipelineConfig:
         qwen_chunk_seconds=a.qwen_chunk_seconds,
         doc_format=a.doc or "txt",
         doc_timestamps=not a.no_doc_timestamps,
+        subtitle_formats=formats,
         max_cpl=a.max_cpl if a.max_cpl is not None else 42,
         max_lines=a.max_lines if a.max_lines is not None else 2,
         max_duration_ms=a.max_duration_ms if a.max_duration_ms is not None else 7000,
@@ -305,15 +321,7 @@ def main(argv=None) -> int:
     runner = PipelineRunner(cfg, profile=profile, sink=sink)
     result = runner.run()
 
-    output_files = [p for p in [
-        result.word_level_srt_path,
-        result.sentence_level_srt_path,
-        result.transcript_txt_path,
-        result.transcript_docx_path,
-        result.audio_tags_srt_path,
-        result.combined_srt_path,
-        result.job_manifest_path,
-    ] if p]
+    output_files = result.output_files
     if output_files:
         print(f"\n{'=' * 60}")
         print("PROCESSING COMPLETE")

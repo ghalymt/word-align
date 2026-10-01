@@ -59,6 +59,8 @@ class ExportConfig:
     transcript_format: str = "txt"      # "none" | "txt" | "docx" | "both"
     transcript_timestamps: bool = True
     tags: bool = False
+    vtt: bool = False                   # sentence-level WebVTT (.vtt)
+    ass: bool = False                   # sentence-level ASS (.ass)
 
 
 @dataclass
@@ -110,7 +112,9 @@ class PipelineProfile:
                 sentence_srt=export.get("sentence_srt", True),
                 transcript_format=export.get("transcript_format", "txt"),
                 transcript_timestamps=export.get("transcript_timestamps", True),
-                tags=export.get("tags", False)),
+                tags=export.get("tags", False),
+                vtt=export.get("vtt", False),
+                ass=export.get("ass", False)),
             qa=QAConfig(
                 enabled=qa.get("enabled", False),
                 signals=qa.get("signals", {})),

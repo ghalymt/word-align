@@ -193,6 +193,20 @@ input[type=file]{display:none}
           </select>
         </div>
       </div>
+      <div class="engine-row">
+        <div>
+          <div class="en">Also export WebVTT (.vtt)</div>
+          <div class="em">For web players, YouTube and HTML5 video</div>
+        </div>
+        <label class="tgl"><input type="checkbox" id="format-vtt"><span class="s"></span></label>
+      </div>
+      <div class="engine-row">
+        <div>
+          <div class="en">Also export ASS (.ass)</div>
+          <div class="em">Styled subtitles for mpv, VLC, Aegisub and burn-in with ffmpeg</div>
+        </div>
+        <label class="tgl"><input type="checkbox" id="format-ass"><span class="s"></span></label>
+      </div>
     </div>
 
     <div class="card" id="engines-card">
@@ -613,6 +627,9 @@ async function startPipeline() {
       mfa_models_dir: document.getElementById('mfa-models').value || null,
     },
     punctuation: document.getElementById('punctuation-on').checked,
+    formats: ['srt',
+              ...(document.getElementById('format-vtt').checked ? ['vtt'] : []),
+              ...(document.getElementById('format-ass').checked ? ['ass'] : [])],
     llm_engine: document.getElementById('llm-engine').value || null,
     llm_model: document.getElementById('llm-model').value || null,
     llm_mtp_model: document.getElementById('llm-mtp-model').value || null,
