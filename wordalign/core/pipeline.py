@@ -12,6 +12,7 @@ import gc
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
@@ -225,6 +226,24 @@ class PipelineRunner:
             self.cancelled = True
             self._emit(CancelledEvent(stage=self._cancel_stage))
             return PipelineResult(cancelled=True)
+
+    @staticmethod
+    @contextmanager
+    def _job_layout(seg_cfg: SegmentationConfig):
+        """Apply this job's CPL/lines/durations to the segment module.
+
+        segment.py keeps its limits in module globals, and they are reset to
+        the defaults after each job. Everything that reads them -- the
+        segmenter, the punctuation re-layout and the SRT validator -- must
+        run inside this block, or it silently uses the defaults instead.
+        """
+        with _SEGMENTATION_LOCK:
+            previous_layout = get_config()
+            try:
+                set_config(seg_cfg)
+                yield
+            finally:
+                set_config(SegmentationConfig(**previous_layout))
 
     def _segment_transcript(self, original_text: str, aligned_words: List[Dict],
                             cue_boundaries: List[Tuple[int, int]],
@@ -583,14 +602,9 @@ class PipelineRunner:
         self._emit(StageStarted(stage="segmentation",
                                 message=f"CPL={seg_cfg.max_cpl}, lines={seg_cfg.max_lines}"))
         t0 = time.time()
-        with _SEGMENTATION_LOCK:
-            previous_layout = get_config()
-            try:
-                set_config(seg_cfg)
-                segments = self._segment_transcript(
-                    original_text, aligned_words, srt_cue_boundaries, seg_cfg)
-            finally:
-                set_config(SegmentationConfig(**previous_layout))
+        with self._job_layout(seg_cfg):
+            segments = self._segment_transcript(
+                original_text, aligned_words, srt_cue_boundaries, seg_cfg)
         self._emit(StageCompleted(stage="segmentation",
                                    duration_seconds=time.time() - t0))
         result.segments = [dict_segment_to_typed(s) for s in segments]
@@ -606,7 +620,10 @@ class PipelineRunner:
             t0 = time.time()
             from ..qa.punctuation import create_restorer, restore_segments
             restorer = create_restorer(cfg)
-            segments = restore_segments(segments, restorer)
+            with self._job_layout(seg_cfg):
+                segments = restore_segments(segments, restorer,
+                                            layout=balance_block_enhanced)
+            result.segments = [dict_segment_to_typed(s) for s in segments]
             self._emit(StageCompleted(stage="punctuation",
                                        duration_seconds=time.time() - t0))
             self._check_cancel("punctuation")
@@ -667,7 +684,8 @@ class PipelineRunner:
                 result.sentence_level_srt_path = path
                 self._emit(StageMessage(stage="output",
                                         message=f"Sentence-level SRT: {len(sentence_entries)} entries -> {path}"))
-                validate_srt_output(sentence_entries, "Sentence-level SRT")
+                with self._job_layout(seg_cfg):
+                    validate_srt_output(sentence_entries, "Sentence-level SRT")
 
         self._check_cancel("output")
         if ensemble_conf is not None:
