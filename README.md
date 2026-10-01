@@ -309,6 +309,17 @@ virtual environments are staged separately with `powershell -File scripts\build_
 (or `build_windows.ps1 -BuildBackends`); MFA remains an optional external binary.
 The resulting `Launch WordAlign.vbs` starts the local GUI without requiring Python.
 
+### Releases are built by GitHub Actions
+
+Pushing a version tag builds the release on GitHub's Windows machines — no local build needed:
+
+```bash
+git tag v2.1.0          # must match the version in wordalign/__init__.py
+git push origin v2.1.0
+```
+
+The **Release build** workflow builds `WordAlign-portable.zip`, smoke-tests the built `WordAlign.exe` (CLI, a Vosk run, the GUI), and creates a **draft** release with the ZIP and the `CHANGELOG.md` notes attached; review it on the Releases page and press *Publish*. Running the workflow from the Actions tab builds and tests without releasing (the ZIP is kept as a run artifact). The Qwen/WhisperX backend environments are not part of this build.
+
 ---
 
 ## 📄 License & Notes
