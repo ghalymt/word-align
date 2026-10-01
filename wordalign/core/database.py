@@ -347,7 +347,12 @@ class ProjectStore:
 
     def save_qa_issue(self, job_id: str, issue: dict) -> None:
         conn = self._get_conn()
-        issue_id = issue.get("id", f"issue_{int(time.time()*1000)}")
+        issue_id = issue.get("id") or f"issue_{time.time_ns()}"
+        # QA issue ids ("issue_agree_0003") are only unique within a job, but
+        # qa_issues.id is the table's primary key. Namespace by job, or the
+        # INSERT OR REPLACE below moves an older job's issue onto this one.
+        if not issue_id.startswith(f"{job_id}:"):
+            issue_id = f"{job_id}:{issue_id}"
         conn.execute(
             "INSERT OR REPLACE INTO qa_issues (id, job_id, category, severity, confidence, start_time, end_time, word_ids, original_text, suggested_text, explanation, sources, status, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -410,8 +415,13 @@ class ProjectStore:
                            context: Optional[str] = None,
                            project_id: Optional[str] = None) -> None:
         conn = self._get_conn()
+        # UNIQUE(project_id, term) never fires for global entries: SQLite
+        # treats NULLs as distinct, so INSERT OR REPLACE kept adding
+        # duplicates. Replace explicitly ("IS" also matches NULL).
+        conn.execute("DELETE FROM glossary WHERE project_id IS ? AND term = ?",
+                     (project_id, term.lower()))
         conn.execute(
-            "INSERT OR REPLACE INTO glossary (project_id, term, correct_form, context, created_at) "
+            "INSERT INTO glossary (project_id, term, correct_form, context, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (project_id, term.lower(), correct_form, context, time.time())
         )

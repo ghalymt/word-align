@@ -150,10 +150,12 @@ def detect_timing_anomalies(consensus: List[WordResult]) -> List[TranscriptIssue
                 risk=RiskScore(timing_risk=0.8),
             ))
 
-    # Long runs of interpolated words
+    # Long runs of interpolated words. The trailing None flushes a run that
+    # reaches the end of the file -- the most common place for one (the
+    # engines stopped recognising speech before the transcript ended).
     interpolated_run = []
-    for i, word in enumerate(consensus):
-        if word.timing_source == "Interpolated":
+    for i, word in enumerate([*consensus, None]):
+        if word is not None and word.timing_source == "Interpolated":
             interpolated_run.append((i, word))
         else:
             if len(interpolated_run) >= MAX_INTERPOLATED_RUN:
