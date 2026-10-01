@@ -162,7 +162,8 @@ class LlamaCppRestorer:
                  max_tokens: int = 2048,
                  temperature: float = 0.1,
                  max_cpl: int = 42,
-                 verbose: bool = False):
+                 verbose: bool = False,
+                 batch_size: int = 40):
         self.engine = engine or os.environ.get("WORDALIGN_LLM_ENGINE")
         self.model = model or os.environ.get("WORDALIGN_LLM_MODEL")
         self.mtp_model = mtp_model or os.environ.get("WORDALIGN_LLM_MTP_MODEL")
@@ -171,6 +172,10 @@ class LlamaCppRestorer:
         self.temperature = temperature
         self.max_cpl = max_cpl
         self.verbose = verbose
+        # Cues per llama-cli call. The whole file in one prompt overflows
+        # --ctx-size / -n on anything longer than a few minutes, and then
+        # every cue silently fell back to the rule-based restorer.
+        self.batch_size = max(1, int(batch_size))
         self._cli_path: Optional[str] = None
 
     # -- resolution --------------------------------------------------------
@@ -207,7 +212,9 @@ class LlamaCppRestorer:
     def _build_prompt(self, cues: List[str]) -> str:
         lines = []
         for i, cue in enumerate(cues, 1):
-            lines.append(f"{i}. {cue}")
+            # One line per cue: the parser keeps numbered lines only, so a
+            # cue's second display line would otherwise be dropped.
+            lines.append(f"{i}. {_flatten(cue)}")
         return (
             "You restore punctuation and capitalization in subtitle text.\n"
             "Rules: do NOT add, remove, or reword any words. Only add "
@@ -232,6 +239,22 @@ class LlamaCppRestorer:
                 continue
             out_lines.append(line)
         return "\n".join(out_lines)
+
+    @staticmethod
+    def _parse_cue_map(cleaned: str, count: int) -> dict:
+        """Numbered output lines -> {cue number: text}, gaps allowed.
+
+        Unlike :meth:`_parse_cues` this applies no commentary filter: the
+        caller checks every cue's words against the input instead, which
+        rejects commentary without also rejecting real cues that happen to
+        start with "I think", "Wait" or "Note".
+        """
+        results: dict = {}
+        for line in cleaned.splitlines():
+            m = _NUMBERED_RE.match(line)
+            if m and 1 <= int(m.group(1)) <= count:
+                results[int(m.group(1))] = m.group(2).strip()
+        return results
 
     def _parse_cues(self, cleaned: str, count: int) -> Optional[List[str]]:
         """Parse numbered output back into per-cue text."""
@@ -260,7 +283,12 @@ class LlamaCppRestorer:
         return out
 
     def restore_cues(self, cues: List[str]) -> List[str]:
-        """Restore all cues in one LLM call; fall back to rules on failure."""
+        """Restore cues with the LLM in batches; fall back to rules per cue.
+
+        A cue whose words the LLM changed (rather than only punctuating and
+        capitalising them) is replaced by the rule-based result, so the
+        subtitle text never drifts from what was said.
+        """
         fallback = RuleBasedRestorer()
         ready, msg = self.is_ready()
         if not ready:
@@ -270,6 +298,26 @@ class LlamaCppRestorer:
         if not cues:
             return []
 
+        restored: List[str] = []
+        llm_count = 0
+        for start in range(0, len(cues), self.batch_size):
+            batch = cues[start:start + self.batch_size]
+            parsed = self._restore_batch(batch)
+            for n, original in enumerate(batch, 1):
+                new = parsed.get(n)
+                if new is not None and _same_words(original, new):
+                    restored.append(new)
+                    llm_count += 1
+                else:
+                    restored.append(fallback.restore(_flatten(original)))
+        if self.verbose:
+            print(f"[punctuation] LLM restored {llm_count}/{len(cues)} cues "
+                  f"(mtp={'on' if self.use_mtp and self.mtp_model else 'off'}); "
+                  "rules used for the rest.")
+        return self._wrap_cues(restored)
+
+    def _restore_batch(self, cues: List[str]) -> dict:
+        """One llama-cli call for *cues* -> {cue number: text} ({} on failure)."""
         prompt = self._build_prompt(cues)
         cmd = [
             self.cli_path(), "-m", self.model,
@@ -289,25 +337,32 @@ class LlamaCppRestorer:
         except (OSError, subprocess.TimeoutExpired) as exc:
             if self.verbose:
                 print(f"[punctuation] llama-cli failed ({exc}); using rules.")
-            return self._wrap_cues(fallback.restore_cues(cues))
+            return {}
 
         if proc.returncode != 0:
             if self.verbose:
                 tail = "\n".join(proc.stderr.strip().splitlines()[-3:])
                 print(f"[punctuation] llama-cli exit {proc.returncode}: {tail}")
-            return self._wrap_cues(fallback.restore_cues(cues))
+            return {}
 
-        cleaned = self._clean_output(proc.stdout)
-        parsed = self._parse_cues(cleaned, len(cues))
-        if parsed is not None:
-            if self.verbose:
-                print(f"[punctuation] LLM restored {len(parsed)} cues "
-                      f"(mtp={'on' if self.use_mtp and self.mtp_model else 'off'})")
-            return self._wrap_cues(parsed)
-
-        if self.verbose:
+        parsed = self._parse_cue_map(self._clean_output(proc.stdout), len(cues))
+        if not parsed and self.verbose:
             print("[punctuation] LLM output unparseable; using rules.")
-        return self._wrap_cues(fallback.restore_cues(cues))
+        return parsed
+
+
+def _flatten(text: str) -> str:
+    """Collapse a cue's display lines into one line of single-spaced words."""
+    return " ".join(text.split())
+
+
+def _same_words(original: str, restored: str) -> bool:
+    """True if *restored* differs from *original* only in punctuation/case."""
+    from ..utils import normalize_word
+
+    def words(text: str) -> List[str]:
+        return [w for w in (normalize_word(t) for t in text.split()) if w]
+    return words(original) == words(restored)
 
 
 # ---------------------------------------------------------------------------
@@ -336,16 +391,23 @@ def create_restorer(cfg) -> Callable[[List[str]], List[str]]:
 
 
 def restore_segments(segments: List[dict],
-                     restorer: Callable[[List[str]], List[str]]) -> List[dict]:
+                     restorer: Callable[[List[str]], List[str]],
+                     layout: Optional[Callable[[str], str]] = None) -> List[dict]:
     """Restore punctuation/capitalization on segment texts in place.
+
+    If *layout* is given (the pipeline passes the segmenter's line
+    balancer), cues are handed to the restorer as single lines and each
+    restored cue is laid out with it, so the result keeps the job's CPL and
+    line count. Without it, cue text is passed through as-is.
 
     Returns the same list of segment dicts with 'text' updated.
     """
     if not segments:
         return segments
-    texts = [s.get("text", "") for s in segments]
+    texts = [_flatten(s.get("text", "")) if layout else s.get("text", "")
+             for s in segments]
     restored = restorer(texts)
     for seg, new_text in zip(segments, restored):
         if new_text:
-            seg["text"] = new_text
+            seg["text"] = layout(_flatten(new_text)) if layout else new_text
     return segments
