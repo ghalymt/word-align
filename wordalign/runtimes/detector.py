@@ -1,12 +1,13 @@
 """Hardware detector — replaces standalone preflight.py with a reusable API."""
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass, field
-from typing import Optional
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -87,6 +88,8 @@ class HardwareDetector:
                     torch.cuda.get_device_properties(idx).total_memory / (1024**3))
         except ImportError:
             pass
+        if not info.cuda_available:
+            self._detect_cuda_backend(info)
 
         # FFmpeg
         info.ffmpeg_path = shutil.which("ffmpeg") or ""
@@ -94,6 +97,37 @@ class HardwareDetector:
         info.ffprobe_available = bool(shutil.which("ffprobe"))
 
         return info
+
+    def _detect_cuda_backend(self, info: HardwareInfo) -> None:
+        script = (
+            "import json, torch; "
+            "available=torch.cuda.is_available(); "
+            "index=torch.cuda.current_device() if available else 0; "
+            "print(json.dumps({'available': available, "
+            "'name': torch.cuda.get_device_name(index) if available else '', "
+            "'vram': torch.cuda.get_device_properties(index).total_memory / (1024**3) "
+            "if available else 0.0, "
+            "'cuda': str(torch.version.cuda or '')}))"
+        )
+        for variable in ("WORDALIGN_WHISPERX_PYTHON", "WORDALIGN_QWEN_PYTHON"):
+            python = os.environ.get(variable)
+            if not python or not Path(python).is_file():
+                continue
+            try:
+                probe = subprocess.run(
+                    [python, "-c", script], capture_output=True, text=True,
+                    timeout=30, check=False)
+                if probe.returncode != 0:
+                    continue
+                payload = json.loads(probe.stdout.strip().splitlines()[-1])
+            except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+                continue
+            if payload.get("available"):
+                info.cuda_available = True
+                info.gpu_name = str(payload.get("name", ""))
+                info.gpu_vram_gb = float(payload.get("vram", 0.0))
+                info.cuda_version = str(payload.get("cuda", ""))
+                return
 
     def check_ffmpeg_works(self) -> bool:
         """Verify ffprobe actually executes, not just exists on PATH."""

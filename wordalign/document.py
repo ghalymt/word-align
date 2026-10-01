@@ -137,24 +137,31 @@ def write_docx(path: str, paragraphs: List[List[Dict]], media_name: str,
 
 def export_transcript(base: str, media_name: str, consensus: List[Dict],
                       doc_format: str = "txt",
-                      timestamps: bool = True) -> None:
+                      timestamps: bool = True) -> dict:
     """Write the consensus transcript in the requested format(s)."""
     if doc_format == "none":
-        return
+        return {}
     paragraphs = group_into_paragraphs(group_into_sentences(consensus))
     low = sum(1 for w in consensus
               if float(w.get("conf", 1.0)) < LOW_CONF_THRESHOLD)
+    written = {}
     if doc_format in ("txt", "both"):
-        write_txt(f"{base}_transcript.txt", paragraphs, timestamps)
+        path = f"{base}_transcript.txt"
+        write_txt(path, paragraphs, timestamps)
+        written["transcript_txt_path"] = path
         print(f"[ok] Transcript .txt written ({len(paragraphs)} paragraphs)")
     if doc_format in ("docx", "both"):
-        ok = write_docx(f"{base}_transcript.docx", paragraphs, media_name,
-                        timestamps)
+        path = f"{base}_transcript.docx"
+        ok = write_docx(path, paragraphs, media_name, timestamps)
         if ok:
+            written["transcript_docx_path"] = path
             print(f"[ok] Transcript .docx written ({len(paragraphs)} "
                   f"paragraphs, {low} words highlighted for review)")
         elif doc_format == "docx":
-            write_txt(f"{base}_transcript.txt", paragraphs, timestamps)
+            path = f"{base}_transcript.txt"
+            write_txt(path, paragraphs, timestamps)
+            written["transcript_txt_path"] = path
             print("[ok] Fell back to .txt transcript")
     if low:
         print(f"[info] {low} low-agreement words flagged for review")
+    return written

@@ -13,11 +13,12 @@ Schema:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 
 SCHEMA_VERSION = 1
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at  REAL,
     completed_at REAL,
     error       TEXT,
+    warnings    TEXT DEFAULT '[]',
     output_files TEXT DEFAULT '[]',       -- JSON array of paths
     word_count  INTEGER DEFAULT 0,
     segment_count INTEGER DEFAULT 0
@@ -122,6 +124,7 @@ class JobRecord:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     error: Optional[str] = None
+    warnings: list = field(default_factory=list)
     output_files: list = field(default_factory=list)
     word_count: int = 0
     segment_count: int = 0
@@ -137,8 +140,12 @@ class ProjectStore:
 
     @staticmethod
     def _default_db_path() -> Path:
-        home = Path.home()
-        d = home / ".wordalign"
+        if os.name == "nt":
+            base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WordAlign"
+        else:
+            base = Path(os.environ.get(
+                "XDG_DATA_HOME", Path.home() / ".local" / "share")) / "wordalign"
+        d = base / "data"
         d.mkdir(parents=True, exist_ok=True)
         return d / "projects.db"
 
@@ -153,6 +160,9 @@ class ProjectStore:
     def _init_db(self):
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
+        job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "warnings" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN warnings TEXT DEFAULT '[]'")
         # Record schema version
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
@@ -237,11 +247,12 @@ class ProjectStore:
     def create_job(self, job: JobRecord) -> None:
         conn = self._get_conn()
         conn.execute(
-            "INSERT INTO jobs (id, project_id, status, profile, started_at, completed_at, error, output_files, word_count, segment_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO jobs (id, project_id, status, profile, started_at, completed_at, error, warnings, output_files, word_count, segment_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (job.id, job.project_id, job.status, json.dumps(job.profile),
              job.started_at, job.completed_at, job.error,
-             json.dumps(job.output_files), job.word_count, job.segment_count)
+             json.dumps(job.warnings), json.dumps(job.output_files),
+             job.word_count, job.segment_count)
         )
         conn.commit()
 
@@ -250,7 +261,7 @@ class ProjectStore:
         sets = []
         vals = []
         for k, v in kwargs.items():
-            if k in ("profile", "output_files"):
+            if k in ("profile", "warnings", "output_files"):
                 v = json.dumps(v)
             sets.append(f"{k} = ?")
             vals.append(v)
@@ -266,9 +277,11 @@ class ProjectStore:
         return JobRecord(
             id=row["id"], project_id=row["project_id"], status=row["status"],
             profile=json.loads(row["profile"] or "{}"),
-            started_at=row["started_at"], completed_at=row["completed_at"],
+            started_at=row["started_at"],             completed_at=row["completed_at"],
             error=row["error"],
+            warnings=json.loads(row["warnings"] or "[]"),
             output_files=json.loads(row["output_files"] or "[]"),
+
             word_count=row["word_count"], segment_count=row["segment_count"],
         )
 
@@ -283,6 +296,7 @@ class ProjectStore:
                 profile=json.loads(r["profile"] or "{}"),
                 started_at=r["started_at"], completed_at=r["completed_at"],
                 error=r["error"],
+                warnings=json.loads(r["warnings"] or "[]"),
                 output_files=json.loads(r["output_files"] or "[]"),
                 word_count=r["word_count"], segment_count=r["segment_count"],
             )
@@ -307,7 +321,7 @@ class ProjectStore:
              json.dumps(metadata or {}))
         )
         conn.commit()
-        return cursor.lastrowid
+        return int(cursor.lastrowid or 0)
 
     def update_stage(self, stage_id: int, **kwargs) -> None:
         conn = self._get_conn()

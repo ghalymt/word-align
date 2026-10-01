@@ -1,6 +1,7 @@
 """MFA adapter."""
 from __future__ import annotations
 
+from ...models.paths import ModelPaths
 from ...plugins.base import EngineDescriptor, EnginePlugin, HealthStatus
 from ...plugins.capabilities import Capability
 
@@ -24,12 +25,25 @@ class MFAAdapter(EnginePlugin):
         import os
         import shutil
         mfa = os.environ.get("WORDALIGN_MFA") or shutil.which("mfa")
-        if mfa:
-            return HealthStatus(ready=True, runtime_status="ready",
-                                message=f"MFA: {mfa}")
-        return HealthStatus(ready=False, runtime_status="missing",
-                            missing_components=["mfa"],
-                            message="Install Montreal Forced Aligner or set WORDALIGN_MFA")
+        if not mfa:
+            return HealthStatus(ready=False, runtime_status="missing",
+                                missing_components=["mfa"],
+                                message="Install Montreal Forced Aligner or set WORDALIGN_MFA")
+        model_root = ModelPaths().resolve("mfa")
+        required = (
+            model_root / "acoustic" / "english_us_arpa.zip"
+            if model_root else None,
+            model_root / "dictionary" / "english_us_arpa.dict"
+            if model_root else None,
+            model_root / "g2p" / "english_us_arpa.zip"
+            if model_root else None,
+        )
+        if not all(path and path.is_file() for path in required):
+            return HealthStatus(ready=False, runtime_status="missing",
+                                missing_components=["mfa_models"],
+                                message="Install the English MFA models under models/mfa")
+        return HealthStatus(ready=True, runtime_status="ready",
+                            message=f"MFA: {mfa}")
 
     def align(self, request) -> dict:
         from ..mfa_engine import MFAWrapper

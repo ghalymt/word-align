@@ -188,6 +188,7 @@ class PipelineConfig:
 
     audio_path: str
     transcript_path: Optional[str] = None      # None -> ensemble transcription mode
+    allow_transcript_mismatch: bool = False
     srt_path: Optional[str] = None             # optional rough SRT as extra timing source
     language: Optional[str] = None             # None -> auto-detect
     output_dir: Optional[str] = None           # default: alongside the audio file
@@ -211,12 +212,18 @@ class PipelineConfig:
         self.model_paths.qwen_models_dir = val
     mfa_cmd: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_MFA"))
-    use_vosk: bool = True
-    use_mfa: bool = True
+    use_vosk: bool = True                      # Vosk timing in the waterfall
+    use_qwen: bool = True                      # Qwen3-ASR timing in the waterfall
+    use_whisperx: bool = True                  # WhisperX timing in the waterfall
+    use_mfa: bool = True                       # MFA surgical timing (last resort)
     use_tags: bool = False                     # experimental; off by default
     yamnet_confidence: float = 0.9
     whisper_model: str = "large-v3"
     ensemble_engines: tuple = ("whisperx", "qwen", "vosk")
+    # New (v2) ensemble flow runs Whisper once for the text, then refines
+    # timing in the Vosk→Qwen→MFA waterfall. The legacy parallel-consensus
+    # flow can still be requested via --legacy-ensemble.
+    use_legacy_ensemble: bool = False
     device: Optional[str] = None               # None -> cuda if available
     doc_format: str = "txt"                    # ensemble transcript: none/txt/docx/both
     doc_timestamps: bool = True                # [HH:MM:SS] paragraph prefixes
@@ -234,6 +241,7 @@ class PipelineConfig:
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
     # Smart punctuation/capitalization via a local LLM (llama.cpp)
     punctuation: bool = False                  # enable restoration stage
+    qa: bool = False                           # deterministic review pass
     llm_engine: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_LLM_ENGINE"))
     llm_model: Optional[str] = field(
@@ -241,6 +249,9 @@ class PipelineConfig:
     llm_mtp_model: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_LLM_MTP_MODEL"))
     llm_mtp: bool = True                       # multi-token prediction draft
+    profile_name: Optional[str] = None
+    engine_overrides: dict = field(default_factory=dict)
+    profile_overrides: dict = field(default_factory=dict)
 
     def vosk_model_path(self, language: str) -> Optional[str]:
         if not self.vosk_models_dir:

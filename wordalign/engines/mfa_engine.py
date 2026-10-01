@@ -180,10 +180,27 @@ class MFAWrapper:
         return all_words
 
     def _get_model_path(self, model_type: str, model_name: str) -> str:
-        mfa_root = Path.home() / "Documents" / "MFA" / "pretrained_models"
+        # Look in the project's local models/mfa/pretrained_models first
+        # (fully portable layout). Fall back to the historical
+        # ~/Documents/MFA location only if the explicit env var is set,
+        # so existing users on a non-portable install keep working.
+        from ..models.paths import _project_models_root
         exts = {"g2p": ".zip", "dictionary": ".dict", "acoustic": ".zip"}
-        candidate = mfa_root / model_type / (model_name + exts.get(model_type, ""))
-        return str(candidate) if candidate.exists() else model_name
+        candidates = [
+            _project_models_root() / "mfa" / "pretrained_models",
+        ]
+        # Allow env-var override via the unified ModelPaths mechanism
+        if os.environ.get("WORDALIGN_MFA_MODELS"):
+            candidates.append(Path(os.environ["WORDALIGN_MFA_MODELS"]))
+        # Last-resort legacy location (kept so previously installed setups still work)
+        candidates.append(Path.home() / "Documents" / "MFA" / "pretrained_models")
+
+        for mfa_root in candidates:
+            candidate = mfa_root / model_type / (model_name + exts.get(model_type, ""))
+            if candidate.exists():
+                return str(candidate)
+        # Return the local canonical path even if missing — caller can detect.
+        return str(candidates[0] / model_type / (model_name + exts.get(model_type, "")))
 
     def generate_custom_dictionary(self, words: Set[str],
                                    model_name: Optional[str] = None) -> Path:

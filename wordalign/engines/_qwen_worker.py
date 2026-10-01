@@ -19,6 +19,8 @@ is what keeps long files from exhausting VRAM.
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -63,11 +65,42 @@ def _clean(torch):
         torch.cuda.ipc_collect()
 
 
+def _normalize_audio(audio_path: str) -> str:
+    ffmpeg = os.environ.get("WORDALIGN_FFMPEG") or shutil.which("ffmpeg")
+    if not ffmpeg or not os.path.isfile(ffmpeg):
+        raise RuntimeError("FFmpeg is required to decode Qwen audio input")
+    output_path = os.path.join(
+        tempfile.gettempdir(), f"_wa_qwen_input_{os.getpid()}.wav")
+    command = [
+        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", audio_path, "-vn", "-ac", "1", "-ar", "16000",
+        "-c:a", "pcm_s16le", output_path,
+    ]
+    try:
+        subprocess.run(
+            command, check=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as exc:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        detail = (exc.stderr or "").strip().splitlines()
+        message = detail[-1] if detail else str(exc)
+        raise RuntimeError(f"FFmpeg audio extraction failed: {message}") from exc
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 44:
+        raise RuntimeError("FFmpeg produced no readable audio")
+    return output_path
+
+
 def _transcribe_chunked(model, audio_path, chunk_seconds, language, torch):
     """Return (words, detected_language). words: list of {word,start,end,conf}."""
     import torchaudio
 
-    waveform, sr = torchaudio.load(audio_path)
+    normalized_path = _normalize_audio(audio_path)
+    try:
+        waveform, sr = torchaudio.load(normalized_path)
+    finally:
+        if os.path.exists(normalized_path):
+            os.remove(normalized_path)
     if waveform.shape[0] > 1:                       # force mono
         waveform = waveform.mean(dim=0, keepdim=True)
     total = waveform.shape[1]
@@ -113,7 +146,8 @@ def main():
     ap.add_argument("--audio", required=True)
     ap.add_argument("--language", default=None)
     ap.add_argument("--models-dir", default=None,
-                    help="HF cache dir holding the Qwen models (enables offline)")
+                    help="HF cache dir holding the Qwen models (enables offline). "
+                         "Default: <project>/models/huggingface/hub")
     ap.add_argument("--asr-model", default="Qwen/Qwen3-ASR-1.7B")
     ap.add_argument("--aligner-model", default="Qwen/Qwen3-ForcedAligner-0.6B")
     ap.add_argument("--chunk-seconds", type=float, default=60.0)
@@ -136,6 +170,13 @@ def main():
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    # Default the cache to the project's local <models>/huggingface/hub so
+    # the worker is fully portable and never reaches for ~/.cache.
+    if not args.models_dir:
+        from ..models.paths import _project_models_root
+        local_hub = _project_models_root() / "huggingface" / "hub"
+        if local_hub.exists():
+            args.models_dir = str(local_hub)
     offline = bool(args.models_dir)
     if args.models_dir:
         os.environ["HF_HOME"] = args.models_dir

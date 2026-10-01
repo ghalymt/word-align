@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from concurrent.futures.process import BrokenProcessPool
 import json
 import math
 import os
@@ -67,7 +68,8 @@ def _vosk_worker(task_args: Tuple[str, str, float]) -> List[Dict]:
     return words
 
 
-def run_vosk_parallel(audio_path: str, model_path: str) -> List[Dict]:
+def run_vosk_parallel(audio_path: str, model_path: str,
+                      cancel_event=None) -> List[Dict]:
     """Decode *audio_path* with Vosk in parallel 10-minute chunks."""
     print("\n" + "=" * 60 + "\nRUNNING VOSK (PARALLEL MODE)")
     start_time_total = time.time()
@@ -78,16 +80,37 @@ def run_vosk_parallel(audio_path: str, model_path: str) -> List[Dict]:
     tasks = []
     num_chunks = math.ceil(total_duration / VOSK_CHUNK_SECONDS) or 1
     for i in range(num_chunks):
+        if cancel_event is not None and cancel_event.is_set():
+            break
         start = i * VOSK_CHUNK_SECONDS
         duration = min(VOSK_CHUNK_SECONDS, total_duration - start)
         chunk_filename = os.path.join(temp_dir, f"chunk_{i}.wav")
         create_chunk_wav(audio_path, start, duration, chunk_filename)
         tasks.append((model_path, chunk_filename, start))
     all_results: List[Dict] = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        for res in ex.map(_vosk_worker, tasks):
-            all_results.extend(res)
-    shutil.rmtree(temp_dir, ignore_errors=True)
+    try:
+        if len(tasks) == 1:
+            if cancel_event is None or not cancel_event.is_set():
+                all_results.extend(_vosk_worker(tasks[0]))
+        else:
+            try:
+                workers = min(MAX_WORKERS, len(tasks))
+                with concurrent.futures.ProcessPoolExecutor(
+                        max_workers=workers) as ex:
+                    for res in ex.map(_vosk_worker, tasks):
+                        if cancel_event is not None and cancel_event.is_set():
+                            break
+                        all_results.extend(res)
+            except (BrokenProcessPool, OSError, RuntimeError) as exc:
+                print(f"[warn] Vosk parallel pool unavailable ({exc}); "
+                      "retrying sequentially.")
+                all_results = []
+                for task in tasks:
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    all_results.extend(_vosk_worker(task))
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
     all_results.sort(key=lambda x: x["start"])
     for w in all_results:
         w.setdefault("conf", 1.0)

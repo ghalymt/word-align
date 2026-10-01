@@ -1,6 +1,11 @@
 """Qwen3-ASR adapter."""
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
+from ...models.paths import ModelPaths
 from ...plugins.base import EngineDescriptor, EnginePlugin, HealthStatus
 from ...plugins.capabilities import Capability
 
@@ -25,19 +30,37 @@ class QwenAdapter(EnginePlugin):
 
     def health_check(self) -> HealthStatus:
         import os
+        missing = []
         qwen_python = os.environ.get("WORDALIGN_QWEN_PYTHON")
-        if qwen_python:
-            return HealthStatus(ready=True, runtime_status="ready",
-                                message=f"venv: {qwen_python}")
-        try:
-            import qwen_asr  # noqa: F401
-            return HealthStatus(ready=True, runtime_status="ready")
-        except ImportError:
+        if qwen_python and not Path(qwen_python).is_file():
+            missing.append("qwen_python")
+        elif qwen_python:
+            try:
+                probe = subprocess.run(
+                    [qwen_python, "-c", "import qwen_asr"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=20, check=False)
+                if probe.returncode != 0:
+                    missing.append("qwen_asr")
+            except (OSError, subprocess.TimeoutExpired):
+                missing.append("qwen_asr")
+        elif not qwen_python:
+            if getattr(sys, "frozen", False):
+                missing.append("qwen_python")
+            else:
+                try:
+                    import qwen_asr  # noqa: F401
+                except Exception:
+                    missing.append("qwen_asr")
+        if not ModelPaths().resolve("qwen"):
+            missing.append("qwen_model")
+        if missing:
             return HealthStatus(
                 ready=False, runtime_status="missing",
-                missing_components=["qwen_asr"],
-                message="Set WORDALIGN_QWEN_PYTHON to the venv with qwen_asr, "
-                        "or pip install qwen-asr")
+                missing_components=missing,
+                message="Configure a Qwen venv and local Hugging Face models")
+        return HealthStatus(ready=True, runtime_status="ready",
+                            message=f"venv: {qwen_python}" if qwen_python else "in-process")
 
     def transcribe(self, request) -> dict:
         from ..qwen_engine import run_qwen

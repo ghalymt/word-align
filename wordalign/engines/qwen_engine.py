@@ -64,17 +64,24 @@ def run_qwen(audio_path: str,
              models_dir: Optional[str] = None,
              chunk_seconds: float = 60.0,
              asr_model: str = "Qwen/Qwen3-ASR-1.7B",
-             aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B") -> List[Dict]:
+             aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
+             cancel_event=None) -> List[Dict]:
     """Transcribe *audio_path* with Qwen and return timed word dicts.
 
     Returns an empty list (never raises) if Qwen is unavailable or fails, so
     the ensemble simply proceeds with its other voters.
     """
     print("\n" + "=" * 60 + "\nRUNNING QWEN3-ASR (ENSEMBLE VOTER)")
+    if cancel_event is not None and cancel_event.is_set():
+        return []
     qwen_python = qwen_python or os.environ.get("WORDALIGN_QWEN_PYTHON")
     models_dir = models_dir or os.environ.get("WORDALIGN_QWEN_MODELS")
 
     if not qwen_python:
+        if getattr(sys, "frozen", False):
+            print("[info] Qwen voter skipped: the frozen build has no dedicated "
+                  "Qwen venv; set WORDALIGN_QWEN_PYTHON to enable it.")
+            return []
         # No dedicated venv configured -- only workable if qwen_asr is present
         # in the interpreter we're already running under.
         try:
@@ -94,18 +101,32 @@ def run_qwen(audio_path: str,
         args += ["--models-dir", models_dir]
 
     try:
-        proc = subprocess.run(args, capture_output=True, text=True)
+        proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                if cancel_event is not None and cancel_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    print("[info] Qwen worker cancelled.")
+                    return []
     except OSError as exc:
         print(f"[warn] Qwen voter could not launch ({runner}): {exc}")
         return []
 
     if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.strip().splitlines()[-5:])
+        tail = "\n".join(stderr.strip().splitlines()[-5:])
         print(f"[warn] Qwen worker failed (exit {proc.returncode}):\n{tail}")
         return []
 
     try:
-        payload = _parse_worker_output(proc.stdout)
+        payload = _parse_worker_output(stdout)
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"[warn] Qwen worker output unparseable: {exc}")
         return []

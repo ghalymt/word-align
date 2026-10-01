@@ -1,6 +1,7 @@
 """YAMNet audio-event tagging adapter."""
 from __future__ import annotations
 
+from ...models.paths import _project_models_root
 from ...plugins.base import EngineDescriptor, EnginePlugin, HealthStatus
 from ...plugins.capabilities import Capability
 
@@ -30,6 +31,11 @@ class YAMNetAdapter(EnginePlugin):
             import tensorflow_hub  # noqa: F401
         except ImportError:
             missing.append("tensorflow-hub")
+        model_root = _project_models_root() / "yamnet"
+        if not (model_root / "saved_model" / "saved_model.pb").is_file():
+            missing.append("yamnet_model")
+        if not (model_root / "yamnet_class_map.csv").is_file():
+            missing.append("yamnet_class_map")
         if missing:
             return HealthStatus(ready=False, runtime_status="missing",
                                 missing_components=missing)
