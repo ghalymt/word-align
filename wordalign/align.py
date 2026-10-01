@@ -17,11 +17,24 @@ from .engines.mfa_engine import MFAWrapper
 from .utils import create_chunk_wav, get_audio_duration, normalize_word
 
 
+# A refinement engine may move a word's timing by at most this much. It is
+# there to sharpen boundaries, not to relocate a word: a bigger jump means the
+# lexical match landed on the wrong occurrence of the word.
+REFINE_MAX_SHIFT_S = 1.0
+
+
 def match_timestamps(aligned_words: List[Dict], source_words: List[Dict],
-                     source_name: str, human_words_norm: List[str]) -> Dict:
-    """Copy timestamps from *source_words* onto still-unmatched entries."""
+                     source_name: str, human_words_norm: List[str],
+                     replace_sources=None) -> Dict:
+    """Copy timestamps from *source_words* onto still-unmatched entries.
+
+    Words already timed by a source in *replace_sources* (the ensemble's
+    primary engine) are treated as provisional: this source may overwrite
+    them, provided the new start is within ``REFINE_MAX_SHIFT_S``.
+    """
     if not source_words:
         return {"matched": 0, "total": len(aligned_words)}
+    replaceable = set(replace_sources or ())
     source_norm = [normalize_word(w["word"]) for w in source_words]
     matcher = SequenceMatcher(None, human_words_norm, source_norm,
                               autojunk=False)
@@ -32,7 +45,12 @@ def match_timestamps(aligned_words: List[Dict], source_words: List[Dict],
             s_idx = match.b + offset
             if h_idx >= len(aligned_words):
                 continue
-            if not aligned_words[h_idx].get("matched", False):
+            current = aligned_words[h_idx]
+            refinable = (current.get("source") in replaceable
+                         and current.get("start") is not None
+                         and abs(source_words[s_idx]["start"] - current["start"])
+                         <= REFINE_MAX_SHIFT_S)
+            if not current.get("matched", False) or refinable:
                 aligned_words[h_idx].update({
                     "start": source_words[s_idx]["start"],
                     "end": source_words[s_idx]["end"],

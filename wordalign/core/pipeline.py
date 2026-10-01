@@ -24,7 +24,7 @@ except ImportError:
 from ..align import (interpolate_timestamps, make_surgical_mfa,
                      match_timestamps, print_alignment_statistics)
 from ..config import PipelineConfig
-from ..ensemble import build_consensus
+from ..ensemble import build_consensus, consensus_to_structured_text
 from ..segment import (enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
                        resolve_overlaps, run_iterative_merging,
@@ -73,6 +73,7 @@ class PipelineRunner:
         self.cancelled = False
         self._stage_durations: Dict[str, float] = {}
         self._warnings: List[str] = []
+        self._primary_attempted: set = set()
         self._apply_profile()
 
     def _profile_for_config(self, cfg: PipelineConfig) -> PipelineProfile:
@@ -380,6 +381,10 @@ class PipelineRunner:
                 stage="init",
                 message=f"{mismatch} Continuing because the mismatch override is enabled.",
                 level="warn"))
+        # In ensemble mode the primary engine times every word, so the
+        # waterfall engines below would have nothing left to fill. Mark the
+        # primary's timings as provisional so Vosk/Qwen can refine them.
+        refinable_sources: set = set()
         if primary_transcript_words:
             primary_source = {
                 "legacy": "Legacy ensemble",
@@ -389,6 +394,8 @@ class PipelineRunner:
             }.get(primary_engine or "", "Primary ASR")
             match_timestamps(aligned_words, primary_transcript_words,
                              primary_source, human_words_norm)
+            if not legacy_mode:
+                refinable_sources = {primary_source}
         self._emit(StageMessage(stage="init",
                                 message=f"Prepared {len(aligned_words)} words for alignment"))
         result.aligned_words = dicts_to_words(aligned_words)
@@ -419,7 +426,8 @@ class PipelineRunner:
                     self._emit(StageMessage(stage="vosk",
                                             message="Loaded Vosk output from cache."))
                 match_timestamps(aligned_words, vosk_words, "Vosk",
-                                 human_words_norm)
+                                 human_words_norm,
+                                 replace_sources=refinable_sources)
                 del vosk_words
                 gc.collect()
             else:
@@ -458,7 +466,10 @@ class PipelineRunner:
                                        duration_seconds=time.time() - t0))
         self._check_cancel("rough_srt")
 
+        # Qwen already ran (and produced nothing) if the primary step fell
+        # through it to Vosk; running the same model again cannot help.
         if (cfg.use_qwen and not legacy_mode and primary_engine != "qwen"
+                and "qwen" not in self._primary_attempted
                 and self._stage_enabled("qwen")):
             self._emit(StageStarted(stage="qwen", message="Running Qwen3-ASR (timing)"))
             t0 = time.time()
@@ -483,7 +494,8 @@ class PipelineRunner:
                                             message="Loaded Qwen output from cache."))
                 if qw_words:
                     match_timestamps(aligned_words, qw_words, "Qwen3-ASR",
-                                     human_words_norm)
+                                     human_words_norm,
+                                     replace_sources=refinable_sources)
                 else:
                     self._emit(StageMessage(stage="qwen",
                                             message="Qwen3-ASR returned no words; skipping.",
@@ -825,6 +837,17 @@ class PipelineRunner:
         return (consensus, consensus_to_structured_text(consensus), wx_events,
                 engine_words.get("vosk", []))
 
+    def _primary_text(self, words: List[Dict]) -> str:
+        """Render ASR words as subtitle-sized lines for the segmenter.
+
+        The segmenter maps transcript *lines* to cues and only ever merges
+        lines, never splits them. Joining the words into one line would turn
+        the whole file into a single cue, so break at sentence ends, pauses
+        and the line budget -- as the legacy ensemble path already does.
+        """
+        return consensus_to_structured_text(
+            words, max_chars=self.profile.segmentation.max_cpl)
+
     def _run_primary_transcript(self, cfg: PipelineConfig, language: str):
         """Ensemble-mode step 1: produce the canonical transcript.
 
@@ -841,7 +864,9 @@ class PipelineRunner:
             wx_events  : WhisperX audio events (used later for tag detection)
         """
         wx_events: List[Dict] = []
+        self._primary_attempted = set()
         if cfg.use_whisperx:
+            self._primary_attempted.add("whisperx")
             from ..engines.whisperx_engine import run_whisperx
             wx_output, cache_hit = self._cached_engine(
                 "whisperx", cfg.whisper_model, language,
@@ -855,12 +880,12 @@ class PipelineRunner:
                 self._emit(StageMessage(stage="whisperx",
                                         message="Loaded WhisperX output from cache."))
             if wx_words:
-                plain_text = " ".join(w["word"] for w in wx_words).strip()
-                return wx_words, plain_text, wx_events, "whisperx"
+                return wx_words, self._primary_text(wx_words), wx_events, "whisperx"
             if self.ctx.cancel_event.is_set():
                 return [], "", wx_events, None
 
         if cfg.use_qwen:
+            self._primary_attempted.add("qwen")
             from ..engines.qwen_engine import run_qwen
             qw_words = run_qwen(
                 cfg.audio_path, language,
@@ -872,8 +897,7 @@ class PipelineRunner:
                 cancel_event=self.ctx.cancel_event,
             )
             if qw_words:
-                plain_text = " ".join(w["word"] for w in qw_words).strip()
-                return qw_words, plain_text, wx_events, "qwen"
+                return qw_words, self._primary_text(qw_words), wx_events, "qwen"
             if self.ctx.cancel_event.is_set():
                 return [], "", wx_events, None
 
@@ -883,12 +907,13 @@ class PipelineRunner:
             from ..engines.vosk_engine import VOSK_AVAILABLE, run_vosk_parallel
             model_path = cfg.vosk_model_path(language)
             if VOSK_AVAILABLE and model_path:
+                self._primary_attempted.add("vosk")
                 vosk_words = run_vosk_parallel(
                     cfg.audio_path, model_path,
                     cancel_event=self.ctx.cancel_event)
                 if vosk_words:
-                    plain_text = " ".join(w["word"] for w in vosk_words).strip()
-                    return vosk_words, plain_text, wx_events, "vosk"
+                    return (vosk_words, self._primary_text(vosk_words),
+                            wx_events, "vosk")
         return [], "", wx_events, None
 
 
