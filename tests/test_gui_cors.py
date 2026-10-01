@@ -60,7 +60,7 @@ class TestGuiServerCors(unittest.TestCase):
         status, headers = self._request(
             "POST", "/api/nope", {"Origin": "https://evil.example",
                                   "Content-Length": "0"})
-        self.assertEqual(status, 404)
+        self.assertEqual(status, 403)   # refused as cross-origin (see test_gui_csrf)
         self.assertNoCors(headers)
 
     def test_cross_origin_preflight_is_not_granted(self):
