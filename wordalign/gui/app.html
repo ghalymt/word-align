@@ -539,6 +539,17 @@ function startWatchingJob(jobId, resumed=false) {
     const data = await get('/job/' + jobId);
     if (!data?.job) return;
     const job = data.job;
+    if (job.status === 'queued') {
+      const pos = data.queue_position;
+      const label = pos > 1 ? `Waiting in queue (${pos - 1} job${pos > 2 ? 's' : ''} ahead)`
+                            : 'Waiting for the current job to finish';
+      if (label !== lastStage) {
+        lastStage = label;
+        document.getElementById('progress-stage').textContent = label;
+        appendLog(label);
+      }
+      return;
+    }
     const stageName = data.stages?.length ? data.stages[data.stages.length - 1].stage_name : 'running';
     const displayName = STAGE_LABELS[stageName] || stageName;
     if (displayName !== lastStage) {
@@ -565,7 +576,7 @@ function startWatchingJob(jobId, resumed=false) {
       currentJobId = null;
       running = false;
       updateRunBtn();
-    } else if (job.status === 'failed' || job.status === 'cancelled') {
+    } else if (['failed', 'cancelled', 'interrupted'].includes(job.status)) {
       stopWatching();
       clearStoredJob();
       appendLog(`${job.status.toUpperCase()}: ${job.error || 'Unknown error'}`, 'e');

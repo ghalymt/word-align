@@ -11,10 +11,12 @@ The scheduler is a per-process semaphore with GPU memory awareness:
 """
 from __future__ import annotations
 
+import itertools
+import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 from .errors import OOMError
 
@@ -26,6 +28,7 @@ class GPUSlot:
     model_id: Optional[str]
     acquired_at: float
     estimated_mb: int = 0
+    slot_id: int = 0
 
 
 @dataclass
@@ -50,7 +53,10 @@ class GPUScheduler:
         self.max_concurrent = max_concurrent
         self._sem = threading.BoundedSemaphore(max_concurrent)
         self._lock = threading.Lock()
-        self._slots: Dict[str, GPUSlot] = {}
+        # Keyed per acquisition, not per engine: two jobs may both hold (or
+        # wait for) a "whisperx" slot, and each must release its own.
+        self._slots: Dict[int, GPUSlot] = {}
+        self._ids = itertools.count(1)
         self._total_acquires = 0
         self._total_releases = 0
 
@@ -87,26 +93,37 @@ class GPUScheduler:
             estimated_mb=estimated_mb,
         )
         with self._lock:
-            self._slots[engine_id] = slot
+            slot.slot_id = next(self._ids)
+            self._slots[slot.slot_id] = slot
             self._total_acquires += 1
         return slot
 
-    def release(self, engine_id: str) -> None:
-        """Release a held GPU slot."""
+    def release(self, slot: Union[GPUSlot, str]) -> bool:
+        """Release a held slot (or the oldest slot held by an engine id).
+
+        Returns False, and releases nothing, if no such slot is held. The
+        old version released the semaphore unconditionally, which raised
+        ValueError on a double release and could free a slot someone else
+        held.
+        """
         with self._lock:
-            if engine_id in self._slots:
-                del self._slots[engine_id]
-                self._total_releases += 1
-        # Release the semaphore (only if it was acquired)
+            if isinstance(slot, GPUSlot):
+                key = slot.slot_id if slot.slot_id in self._slots else None
+            else:
+                key = next((k for k, s in self._slots.items()
+                            if s.engine_id == slot), None)
+            if key is None:
+                return False
+            del self._slots[key]
+            self._total_releases += 1
         self._sem.release()
+        return True
 
     def release_all(self) -> int:
         """Release all held slots. Returns how many were released."""
         with self._lock:
-            ids = list(self._slots.keys())
-        for engine_id in ids:
-            self.release(engine_id)
-        return len(ids)
+            slots = list(self._slots.values())
+        return sum(1 for slot in slots if self.release(slot))
 
     def __enter__(self):
         return self
@@ -162,4 +179,25 @@ def run_with_gpu_slot(scheduler: GPUScheduler,
     try:
         return fn(*args, **kwargs)
     finally:
-        scheduler.release(engine_id)
+        scheduler.release(slot)
+
+
+_SHARED: Optional[GPUScheduler] = None
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_scheduler() -> GPUScheduler:
+    """The process-wide scheduler every pipeline run shares.
+
+    WORDALIGN_GPU_SLOTS sets how many GPU engines may run at once
+    (default 1: one model on the GPU at a time).
+    """
+    global _SHARED
+    with _SHARED_LOCK:
+        if _SHARED is None:
+            try:
+                slots = max(1, int(os.environ.get("WORDALIGN_GPU_SLOTS", "1")))
+            except ValueError:
+                slots = 1
+            _SHARED = GPUScheduler(max_concurrent=slots)
+        return _SHARED

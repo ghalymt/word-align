@@ -14,6 +14,7 @@ no CORS headers).
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import shutil
@@ -38,6 +39,102 @@ from ..models.paths import (
 _ACTIVE_RUNS: dict[str, dict[str, Any]] = {}
 _UPLOAD_DIRS: dict[str, str] = {}
 _RUNS_LOCK = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Job queue. Every run used to get its own thread, so two GUI jobs loaded
+# their GPU models at the same time and one (or both) ran out of memory.
+# Jobs now wait in a FIFO and WORDALIGN_MAX_CONCURRENT_JOBS workers (default
+# 1) take them in order. Inside a run, GPU engines additionally hold the
+# process-wide GPU slot (core.gpu_scheduler), so raising the job limit lets
+# CPU stages overlap without putting two models on the GPU.
+# ---------------------------------------------------------------------------
+_QUEUE: "collections.deque[tuple[str, dict]]" = collections.deque()
+_QUEUE_COND = threading.Condition(_RUNS_LOCK)
+_WORKERS: list = []
+
+
+def _max_concurrent_jobs() -> int:
+    try:
+        return max(1, int(os.environ.get("WORDALIGN_MAX_CONCURRENT_JOBS", "1")))
+    except ValueError:
+        return 1
+
+
+def _queue_position(job_id: str) -> Optional[int]:
+    """1-based place in the queue, or None if the job is not waiting."""
+    with _RUNS_LOCK:
+        for n, (queued_id, _) in enumerate(_QUEUE, 1):
+            if queued_id == job_id:
+                return n
+    return None
+
+
+def _submit_job(job_id: str, params: dict) -> int:
+    """Queue a job; start the workers on first use. Returns its position."""
+    with _QUEUE_COND:
+        _ACTIVE_RUNS[job_id] = {"runner": None, "cancel_requested": False,
+                                "status": "queued"}
+        _QUEUE.append((job_id, params))
+        position = len(_QUEUE)
+        while len(_WORKERS) < _max_concurrent_jobs():
+            worker = threading.Thread(target=_queue_worker, daemon=True,
+                                      name=f"wordalign-job-{len(_WORKERS) + 1}")
+            _WORKERS.append(worker)
+            worker.start()
+        _QUEUE_COND.notify()
+    return position
+
+
+def _cleanup_job(job_id: str, params: dict) -> None:
+    owned_upload_dir = params.get("_owned_upload_dir")
+    if owned_upload_dir:
+        shutil.rmtree(owned_upload_dir, ignore_errors=True)
+    with _RUNS_LOCK:
+        upload_id = params.get("upload_id")
+        if upload_id:
+            _UPLOAD_DIRS.pop(str(upload_id), None)
+        _ACTIVE_RUNS.pop(job_id, None)
+
+
+def _cancel_queued_job(job_id: str, params: dict) -> None:
+    """Finish a job that was cancelled before it started."""
+    try:
+        from ..core.database import ProjectStore
+        store = ProjectStore()
+        store.update_job(job_id, status="cancelled", completed_at=time.time(),
+                         error="Cancelled before it started")
+        store.close()
+    except Exception:
+        pass
+    _cleanup_job(job_id, params)
+
+
+def _queue_worker() -> None:
+    while True:
+        with _QUEUE_COND:
+            while not _QUEUE:
+                _QUEUE_COND.wait()
+            job_id, params = _QUEUE.popleft()
+            state = _ACTIVE_RUNS.get(job_id)
+            cancelled = state is None or state.get("cancel_requested")
+            if not cancelled:
+                state["status"] = "running"
+        if cancelled:
+            _cancel_queued_job(job_id, params)
+            continue
+        try:
+            from ..core.database import ProjectStore
+            store = ProjectStore()
+            store.update_job(job_id, status="running", started_at=time.time())
+            store.close()
+        except Exception:
+            pass
+        try:
+            PipelineAPIHandler._run_pipeline_thread(None, job_id, params)
+        except Exception:
+            pass   # _run_pipeline_thread records its own failures
+        finally:
+            _cleanup_job(job_id, params)
 
 
 class _JobSink:
@@ -395,7 +492,10 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             from ..core.database import ProjectStore
             from ..core.recovery import CrashRecovery
             store = ProjectStore()
-            report = CrashRecovery(store).find_incomplete_jobs()
+            with _RUNS_LOCK:
+                live = set(_ACTIVE_RUNS)
+            report = CrashRecovery(store).find_incomplete_jobs(
+                exclude_job_ids=live)
             store.close()
             self._send_json({
                 "count": report.count,
@@ -432,7 +532,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             qa_issues = store.list_qa_issues(job_id) if job else []
             store.close()
             if job:
-                self._send_json({"job": vars(job), "stages": stages, "qa_issues": qa_issues})
+                self._send_json({"job": vars(job), "stages": stages,
+                                 "qa_issues": qa_issues,
+                                 "queue_position": _queue_position(job_id)})
             else:
                 self._send_json({"error": "Job not found"}, 404)
 
@@ -494,6 +596,7 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/run/cancel":
             job_id = body.get("job_id")
+            dequeued = None
             with _RUNS_LOCK:
                 state = _ACTIVE_RUNS.get(job_id)
                 if state is None:
@@ -501,6 +604,14 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                     return
                 state["cancel_requested"] = True
                 runner = state.get("runner")
+                if state.get("status") == "queued":
+                    for item in list(_QUEUE):
+                        if item[0] == job_id:
+                            _QUEUE.remove(item)
+                            dequeued = item
+                            break
+            if dequeued is not None:
+                _cancel_queued_job(*dequeued)
             if runner is not None:
                 runner.cancel()
             self._send_json({"ok": True, "job_id": job_id})
@@ -558,8 +669,7 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
             profile = body.get("profile")
             profile_data = {"name": profile} if isinstance(profile, str) else (profile or {})
             store.create_job(JobRecord(
-                id=job_id, project_id=project_id, status="running",
-                started_at=time.time(),
+                id=job_id, project_id=project_id, status="queued",
                 profile=profile_data,
             ))
             store.close()
@@ -575,20 +685,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                         _UPLOAD_DIRS.pop(str(upload_id), None)
             return {"error": f"Could not initialize job: {exc}"}
 
-        with _RUNS_LOCK:
-            _ACTIVE_RUNS[job_id] = {
-                "runner": None,
-                "cancel_requested": False,
-            }
-
-        thread = threading.Thread(
-            target=self._run_pipeline_thread,
-            args=(job_id, run_params),
-            daemon=True,
-        )
-        thread.start()
-
-        return {"job_id": job_id, "status": "running"}
+        position = _submit_job(job_id, run_params)
+        return {"job_id": job_id, "status": "queued",
+                "queue_position": position}
 
     def _run_pipeline_thread(self, job_id: str, params: dict):
         from ..config import PipelineConfig
@@ -726,6 +825,16 @@ def run_server(port: int = 5575, host: str = "127.0.0.1", open_browser: bool = T
     server = ThreadingHTTPServer((host, port), PipelineAPIHandler)
     url = f"http://{host}:{port}"
     print(f"WordAlign GUI server: {url}")
+    try:
+        from ..core.database import ProjectStore
+        store = ProjectStore()
+        stale = store.mark_interrupted_jobs()
+        store.close()
+        if stale:
+            print(f"Marked {stale} unfinished job(s) from the last session "
+                  "as interrupted.")
+    except Exception as exc:
+        print(f"[warn] Could not check for interrupted jobs: {exc}")
 
     if open_browser:
         import webbrowser
