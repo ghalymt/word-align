@@ -88,8 +88,10 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--tags", action="store_true",
                    help="enable experimental audio-event tagging")
     p.add_argument("--engines", default=None,
-                   help="comma-separated engines: whisperx,qwen,vosk; "
-                        "also accepts parakeet,canary for legacy consensus")
+                   help="comma-separated engines: whisperx,qwen,vosk,mfa; "
+                        "also accepts parakeet,canary for legacy consensus. "
+                        "Explicit --no-<engine> / --use-mfa / --no-mfa flags "
+                        "take precedence")
     p.add_argument("--qwen-python",
                    help="python.exe of the venv holding qwen_asr "
                         "(or set WORDALIGN_QWEN_PYTHON)")
@@ -178,17 +180,12 @@ def _parse_args(argv=None) -> PipelineConfig:
     # visible even when both CLI and env-var are unset.
     model_paths._fill_auto()
 
-    engine_overrides = {}
-    if a.no_vosk is not None:
-        engine_overrides["vosk"] = not a.no_vosk
-    if a.no_qwen is not None:
-        engine_overrides["qwen"] = not a.no_qwen
-    if a.no_whisperx is not None:
-        engine_overrides["whisperx"] = not a.no_whisperx
-    if a.use_mfa is not None:
-        engine_overrides["mfa"] = a.use_mfa
     engines = tuple(e.strip() for e in (a.engines or "whisperx,qwen,vosk").split(",")
                     if e.strip())
+    engine_overrides = {}
+    # --engines is a bulk selection; the per-engine flags are more specific,
+    # so they are applied afterwards and win (e.g. --engines ...,vosk
+    # --no-vosk, or --engines whisperx,qwen,vosk --use-mfa).
     if a.engines is not None:
         selected = set(engines)
         engine_overrides.update({
@@ -197,6 +194,14 @@ def _parse_args(argv=None) -> PipelineConfig:
             "whisperx": "whisperx" in selected,
             "mfa": "mfa" in selected,
         })
+    if a.no_vosk is not None:
+        engine_overrides["vosk"] = not a.no_vosk
+    if a.no_qwen is not None:
+        engine_overrides["qwen"] = not a.no_qwen
+    if a.no_whisperx is not None:
+        engine_overrides["whisperx"] = not a.no_whisperx
+    if a.use_mfa is not None:
+        engine_overrides["mfa"] = a.use_mfa
 
     profile_overrides = {}
     for name in ("max_cpl", "max_lines", "max_duration_ms", "min_cue_ms"):
