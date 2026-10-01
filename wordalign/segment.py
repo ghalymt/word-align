@@ -10,7 +10,6 @@ prevents greedy over-merging:
 from __future__ import annotations
 
 import re
-from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 from .config import (CLAUSE_MARKERS, ITERATION_START, MAX_CPL,
@@ -219,10 +218,29 @@ def balance_block_enhanced(text: str) -> str:
     return flat   # no clean split -> leave long, visible for manual review
 
 
-# Upper bound on candidate splits examined per cue for 3+ lines (a cue holds
-# at most a few dozen words, so this is only a guard against pathological
-# input such as a very long run of one-letter tokens).
-_MAX_SPLIT_CANDIDATES = 20000
+# Upper bound on search steps per cue for 3+ lines. The search below only
+# follows splits whose lines fit, so real cues finish in a few thousand
+# steps; this guards against pathological input (hundreds of one-letter
+# tokens), where the best split found so far is used.
+_MAX_SPLIT_STEPS = 100_000
+
+_NO_LINE_START = ",;:!?…。！？‥"
+_NO_LINE_END = "([{«"
+
+
+def _split_score(lines: List[str]) -> float:
+    lengths = [count_visible_characters(line) for line in lines]
+    score = float(max(lengths) - min(lengths))
+    for prev, nxt in zip(lines, lines[1:]):
+        w1 = prev.split()[-1].lower().rstrip(",.;")
+        w2 = nxt.split()[0].lower().rstrip(",.;")
+        if w2 in PREFER_NEW_LINE_WORDS:
+            score -= 5
+        if w1 in PREFER_NEW_LINE_WORDS:
+            score += 15
+        if w2 in CLAUSE_MARKERS["conjunctions"]:
+            score -= 3
+    return score
 
 
 def _best_multiline_split(text: str, n_lines: int) -> Optional[List[str]]:
@@ -233,37 +251,56 @@ def _best_multiline_split(text: str, n_lines: int) -> Optional[List[str]]:
     (articles/prepositions start a line rather than end it, conjunctions
     are good line starts). Lines may not start with closing punctuation or
     end with an opening bracket. Returns None if no split fits.
+
+    The search extends a line one word at a time and abandons it as soon as
+    it is too long or the rest cannot fit on the remaining lines, so it
+    only ever visits splits that can work -- enumerating every combination
+    of cut points blindly gave up on five-line cues before reaching one.
     """
     words = text.split()
     if len(words) < n_lines:
         return None
-    best: Optional[Tuple[float, List[str]]] = None
-    for checked, cuts in enumerate(combinations(range(1, len(words)),
-                                                n_lines - 1)):
-        if checked >= _MAX_SPLIT_CANDIDATES:
-            break
-        bounds = (0, *cuts, len(words))
-        lines = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
-        lengths = [count_visible_characters(line) for line in lines]
-        if max(lengths) > _max_cpl or min(lengths) < 2:
-            continue
-        if any(line[0] in ",;:!?…。！？‥" for line in lines[1:]):
-            continue
-        if any(line[-1] in "([{«" for line in lines[:-1]):
-            continue
-        score = float(max(lengths) - min(lengths))
-        for prev, nxt in zip(lines, lines[1:]):
-            w1 = prev.split()[-1].lower().rstrip(",.;")
-            w2 = nxt.split()[0].lower().rstrip(",.;")
-            if w2 in PREFER_NEW_LINE_WORDS:
-                score -= 5
-            if w1 in PREFER_NEW_LINE_WORDS:
-                score += 15
-            if w2 in CLAUSE_MARKERS["conjunctions"]:
-                score -= 3
-        if best is None or score < best[0]:
-            best = (score, lines)
-    return best[1] if best else None
+    # Visible length of words[a:b] joined by spaces, in O(1).
+    prefix = [0]
+    for word in words:
+        prefix.append(prefix[-1] + count_visible_characters(word))
+
+    def width(a: int, b: int) -> int:
+        return prefix[b] - prefix[a] + (b - a - 1)
+
+    best: List = [None]           # [(score, lines)]
+    steps = [0]
+
+    def search(start: int, lines_left: int, cuts: List[int]) -> None:
+        if lines_left == 1:
+            last = width(start, len(words))
+            if last > _max_cpl or last < 2 or words[start][0] in _NO_LINE_START:
+                return
+            bounds = [0, *cuts, len(words)]
+            lines = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+            score = _split_score(lines)
+            if best[0] is None or score < best[0][0]:
+                best[0] = (score, lines)
+            return
+        if cuts and words[start][0] in _NO_LINE_START:
+            return
+        # Leave at least one word for each of the remaining lines.
+        for end in range(start + 1, len(words) - lines_left + 2):
+            steps[0] += 1
+            if steps[0] > _MAX_SPLIT_STEPS:
+                return
+            line_width = width(start, end)
+            if line_width > _max_cpl:
+                break                     # longer lines only get longer
+            if line_width < 2 or words[end - 1][-1] in _NO_LINE_END:
+                continue
+            rest_lines = lines_left - 1
+            if width(end, len(words)) > rest_lines * _max_cpl + rest_lines - 1:
+                continue                  # a longer line leaves less behind
+            search(end, rest_lines, cuts + [end])
+
+    search(0, n_lines, [])
+    return best[0][1] if best[0] else None
 
 
 def is_eligible_sentence(sentence_text: str, start_time: str,

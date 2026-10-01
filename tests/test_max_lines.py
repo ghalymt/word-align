@@ -59,6 +59,26 @@ class TestBalancer(_Layout):
         text = "we should leave now before the rain gets any heavier"
         self.assertNotIn("\n", balance_block_enhanced(text))
 
+    def test_five_lines_found_for_a_cue_that_needs_them(self):
+        # Regression: the 3+-line search enumerated cut points in order and
+        # stopped after 20,000 of them, all with a one- to three-word first
+        # line, so a 195-char cue at 42 CPL / 5 lines was left on one line.
+        self.layout(42, 5)
+        text = (LONG + " after the board has signed off on the budget "
+                "and the auditors have checked every figure twice")
+        lines = balance_block_enhanced(text).split("\n")
+        self.assertEqual(len(lines), 5, lines)
+        self.assertTrue(all(len(line) <= 42 for line in lines), lines)
+        self.assertEqual(" ".join(lines), text)
+
+    def test_many_tiny_words_finish_quickly(self):
+        import time
+        self.layout(42, 8)
+        started = time.monotonic()
+        lines = balance_block_enhanced(" ".join(["a"] * 150)).split("\n")
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertTrue(all(len(line) <= 42 for line in lines))
+
     def test_pretty_split_check_honours_max_lines(self):
         self.layout(42, 2)
         self.assertFalse(check_if_text_can_be_split_prettily(LONG))
