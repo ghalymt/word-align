@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wordalign"
-version = "2.0.0"
+version = "2.1.0"
 description = "Word-accurate subtitle alignment and transcription for audio and video"
 readme = "README.md"
 requires-python = ">=3.10"

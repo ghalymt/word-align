@@ -24,8 +24,8 @@ Web GUI (`app.html`) connects automatically; `python -m wordalign --gui`.
 
 ### Thinned CLI (use PipelineRunner) ✅
 **File:** `wordalign/cli_v2.py`
-CLI delegates to `PipelineRunner` with `PrintSink`. `__main__.py` prefers
-cli_v2, falls back to the original cli.py. Identical output files.
+CLI delegates to `PipelineRunner` with `PrintSink`. `python -m wordalign`
+runs cli_v2 only (2.1 removed the silent fallback to the v1 cli.py).
 
 ## Medium Priority
 
@@ -65,8 +65,9 @@ event log, QA issue tree, model path config. `python -m wordalign.gui.native`.
 ### Diarization Plugin ✅
 **File:** `wordalign/engines/adapters/diarization_adapter.py`
 EnginePlugin with `Capability.DIARIZE`. Uses pyannote.audio when installed;
-falls back to silence-gap pseudo-speaker assignment. Transcript renderer
-emits `SPEAKER N:` prefixes.
+falls back to silence-gap pseudo-speaker assignment. The pipeline's
+`--diarize` (2.1, `wordalign/diarize.py`) uses pyannote only, with no
+heuristic fallback, and labels cues in SRT, WebVTT, ASS and transcripts.
 
 ### Glossary / Custom Vocabulary ✅
 Schema + CRUD in `wordalign/core/database.py` (project-level and global).
