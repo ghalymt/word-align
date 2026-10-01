@@ -202,6 +202,13 @@ input[type=file]{display:none}
       </div>
       <div class="engine-row">
         <div>
+          <div class="en">Speaker labels</div>
+          <div class="em">Names speakers in the subtitles (needs pyannote.audio + a Hugging Face token)</div>
+        </div>
+        <label class="tgl"><input type="checkbox" id="diarize-on"><span class="s"></span></label>
+      </div>
+      <div class="engine-row">
+        <div>
           <div class="en">Also export ASS (.ass)</div>
           <div class="em">Styled subtitles for mpv, VLC, Aegisub and burn-in with ffmpeg</div>
         </div>
@@ -642,6 +649,7 @@ async function startPipeline() {
       mfa_models_dir: document.getElementById('mfa-models').value || null,
     },
     punctuation: document.getElementById('punctuation-on').checked,
+    diarize: document.getElementById('diarize-on').checked,
     formats: ['srt',
               ...(document.getElementById('format-vtt').checked ? ['vtt'] : []),
               ...(document.getElementById('format-ass').checked ? ['ass'] : [])],

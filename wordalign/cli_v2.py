@@ -118,6 +118,11 @@ def _parse_args(argv=None) -> PipelineConfig:
                    help="sentence-level subtitle formats to write, comma-"
                         "separated: srt (default), vtt (WebVTT), ass "
                         "(Advanced SubStation Alpha)")
+    p.add_argument("--diarize", action="store_true",
+                   help="label speakers (needs pyannote.audio and a Hugging "
+                        "Face token, HF_TOKEN, for its model)")
+    p.add_argument("--speakers", type=int, default=None, metavar="N",
+                   help="the number of speakers, if known (implies --diarize)")
     p.add_argument("--no-doc-timestamps", action="store_true",
                    help="omit [HH:MM:SS] paragraph timestamps in the "
                         "transcript document")
@@ -148,6 +153,14 @@ def _parse_args(argv=None) -> PipelineConfig:
                         "(default: mtp-*.gguf in <project>/models/llm/, or set WORDALIGN_LLM_MTP_MODEL)")
     p.add_argument("--no-mtp", action="store_true",
                    help="disable multi-token prediction draft model")
+    p.add_argument("--batch", metavar="FOLDER",
+                   help="process every media file in FOLDER (transcripts are "
+                        "paired by name: talk.mp4 + talk.txt/.srt); all other "
+                        "flags apply to every file")
+    p.add_argument("--recursive", action="store_true",
+                   help="with --batch: include subfolders")
+    p.add_argument("--skip-existing", action="store_true",
+                   help="with --batch: skip files whose subtitles already exist")
     p.add_argument("--gui", action="store_true",
                    help="start the GUI backend server instead of running CLI")
     p.add_argument("--port", type=int, default=5575,
@@ -170,7 +183,7 @@ def _parse_args(argv=None) -> PipelineConfig:
         run_server(port=a.port)
         sys.exit(0)
     if not a.audio:
-        p.error("audio is required unless --gui is used")
+        p.error("audio is required unless --gui or --batch is used")
 
     from .models.paths import ModelPaths
     # Build the ModelPaths only with the values the user explicitly
@@ -239,6 +252,8 @@ def _parse_args(argv=None) -> PipelineConfig:
         profile_overrides["doc_timestamps"] = False
     if a.tags:
         profile_overrides["tags"] = True
+    if a.speakers is not None and a.speakers < 1:
+        p.error(f"--speakers must be at least 1 (got {a.speakers})")
 
     return PipelineConfig(
         audio_path=a.audio,
@@ -264,6 +279,9 @@ def _parse_args(argv=None) -> PipelineConfig:
         doc_format=a.doc or "txt",
         doc_timestamps=not a.no_doc_timestamps,
         subtitle_formats=formats,
+        # --speakers N on its own clearly asks for speaker labels.
+        diarize=a.diarize or a.speakers is not None,
+        num_speakers=a.speakers,
         max_cpl=a.max_cpl if a.max_cpl is not None else 42,
         max_lines=a.max_lines if a.max_lines is not None else 2,
         max_duration_ms=a.max_duration_ms if a.max_duration_ms is not None else 7000,
@@ -310,8 +328,19 @@ def main(argv=None) -> int:
         from .gui.server import run_server
         run_server(port=int(os.environ.get("WORDALIGN_PORT", "5575")))
         return 0
+    if "--gui" not in args:
+        from .batch import batch_requested, run_batch
+        if batch_requested(args):
+            print(f"WORD-ALIGN v{__version__}")
+            return run_batch(args, _run_one, _parse_args)
     cfg = _parse_args(args)
     print(f"WORD-ALIGN v{__version__}")
+    result = _run_one(cfg)
+    return 0 if result.output_files else 1
+
+
+def _run_one(cfg: PipelineConfig):
+    """Run the pipeline for one file, printing progress and its outputs."""
     print(f"Audio: {cfg.audio_path}")
     if cfg.transcript_path:
         print(f"Transcript: {cfg.transcript_path}")
@@ -331,10 +360,9 @@ def main(argv=None) -> int:
             if p:
                 print(f"  → {p}")
         print("=" * 60)
-        return 0
     else:
         print(f"\n[error] {result.error or 'Pipeline produced no output.'}")
-        return 1
+    return result
 
 
 if __name__ == "__main__":

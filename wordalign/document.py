@@ -34,6 +34,11 @@ def group_into_sentences(consensus: List[Dict]) -> List[Dict]:
     sentences: List[Dict] = []
     current: List[Dict] = []
     for w in consensus:
+        if (current and w.get("speaker") and current[-1].get("speaker")
+                and w["speaker"] != current[-1]["speaker"]):
+            # A new speaker starts a new sentence (and paragraph).
+            sentences.append(_close_sentence(current))
+            current = []
         current.append(w)
         if has_terminal_punctuation(w["word"]) or len(current) >= MAX_SENTENCE_WORDS:
             sentences.append(_close_sentence(current))
@@ -46,11 +51,13 @@ def group_into_sentences(consensus: List[Dict]) -> List[Dict]:
 def _close_sentence(words: List[Dict]) -> Dict:
     starts = [w["start"] for w in words if w.get("start") is not None]
     ends = [w["end"] for w in words if w.get("end") is not None]
+    speakers = [w["speaker"] for w in words if w.get("speaker")]
     return {
         "words": words,
         "text": " ".join(w["word"] for w in words),
         "start": min(starts) if starts else None,
         "end": max(ends) if ends else None,
+        "speaker": max(set(speakers), key=speakers.count) if speakers else None,
     }
 
 
@@ -61,7 +68,9 @@ def group_into_paragraphs(sentences: List[Dict]) -> List[List[Dict]]:
     for sent in sentences:
         gap = (sent["start"] - prev_end
                if sent["start"] is not None and prev_end is not None else 0.0)
-        if current and (gap > PAUSE_PARAGRAPH_SECONDS
+        speaker_change = (current and sent.get("speaker")
+                          and sent["speaker"] != current[-1].get("speaker"))
+        if current and (gap > PAUSE_PARAGRAPH_SECONDS or speaker_change
                         or len(current) >= MAX_PARAGRAPH_SENTENCES):
             paragraphs.append(current)
             current = []
@@ -78,6 +87,8 @@ def write_txt(path: str, paragraphs: List[List[Dict]],
     lines: List[str] = []
     for para in paragraphs:
         text = " ".join(s["text"] for s in para)
+        if para[0].get("speaker"):
+            text = f"{para[0]['speaker']}: {text}"
         if timestamps:
             first_ts = next((s["start"] for s in para
                              if s["start"] is not None), None)
@@ -117,6 +128,8 @@ def write_docx(path: str, paragraphs: List[List[Dict]], media_name: str,
                              if s["start"] is not None), None)
             ts_run = p.add_run(_fmt_ts(first_ts) + " ")
             ts_run.bold = True
+        if para[0].get("speaker"):
+            p.add_run(f"{para[0]['speaker']}: ").bold = True
         buffer: List[str] = []
         for sent in para:
             for w in sent["words"]:

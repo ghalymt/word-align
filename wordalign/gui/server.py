@@ -740,6 +740,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 max_cpl=int(params.get("max_cpl", 42)),
                 max_lines=int(params.get("max_lines", 2)),
                 subtitle_formats=formats,
+                diarize=bool(params.get("diarize", False)),
+                num_speakers=(int(params["num_speakers"])
+                              if params.get("num_speakers") else None),
                 use_tags=params.get("use_tags", False),
                 punctuation=params.get("punctuation", False),
                 qa=params.get("qa", False),
