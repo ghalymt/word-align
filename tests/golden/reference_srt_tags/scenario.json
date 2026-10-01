@@ -1,0 +1,14 @@
+{
+  "description": "SRT transcript with [tags]: its cue boundaries are kept, tags never take a word slot.",
+  "args": [
+    "--no-qwen",
+    "--no-whisperx",
+    "--no-mfa",
+    "-l",
+    "en"
+  ],
+  "transcript": "transcript.srt",
+  "engines": {
+    "vosk": "vosk.json"
+  }
+}

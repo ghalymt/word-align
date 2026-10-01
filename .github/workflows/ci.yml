@@ -42,3 +42,37 @@ jobs:
 
       - name: Test
         run: python -m pytest tests/ -q
+
+  # Timing accuracy on real audio with a real engine. Linux only: it needs
+  # ffmpeg and downloads a 40 MB Vosk model, so it is kept out of the
+  # cross-platform matrix above.
+  accuracy:
+    name: accuracy (real audio, Vosk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Download Vosk model
+        run: |
+          curl -sSfL --retry 3 -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk.zip -d "$RUNNER_TEMP"
+
+      - name: Accuracy test
+        env:
+          WORDALIGN_TEST_VOSK_MODEL: ${{ runner.temp }}/vosk-model-small-en-us-0.15
+          WORDALIGN_REQUIRE_ACCURACY: "1"
+        run: python -m pytest tests/test_accuracy_real_audio.py -q -s

@@ -1,0 +1,13 @@
+{
+  "description": "No transcript: WhisperX gives the text and first timings; Vosk refines the timings of the words it recognises.",
+  "args": [
+    "--no-qwen",
+    "--no-mfa",
+    "-l",
+    "en"
+  ],
+  "engines": {
+    "whisperx": "whisperx.json",
+    "vosk": "vosk.json"
+  }
+}

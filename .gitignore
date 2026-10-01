@@ -14,6 +14,8 @@ dist/
 *.m4a
 *.srt
 !examples/**/*.srt
+# Golden-test fixtures and expected outputs are part of the test suite.
+!tests/golden/**/*.srt
 # Engine artifacts
 # (Vosk and MFA scratch dirs now live in the system temp dir, but older
 #  runs may have left these behind in the working directory.)
