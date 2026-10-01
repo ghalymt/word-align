@@ -100,6 +100,30 @@ class TestValidator(_Layout):
         self.assertEqual(issues["lines_high"], 1)
 
 
+class TestLayoutFlagValidation(unittest.TestCase):
+
+    def test_impossible_layouts_are_rejected(self):
+        # Regression: --max-lines 0, --cpl 0 and negative durations were
+        # accepted and produced degenerate output without any message.
+        from wordalign.cli_v2 import _parse_args
+        for args in (["--max-lines", "0"], ["--max-lines", "-1"],
+                     ["--cpl", "0"], ["--max-duration-ms", "0"],
+                     ["--min-cue-ms", "-5"],
+                     ["--min-cue-ms", "3000", "--max-duration-ms", "2000"]):
+            with self.subTest(args=args), \
+                    contextlib.redirect_stderr(io.StringIO()) as err, \
+                    self.assertRaises(SystemExit) as caught:
+                _parse_args(["a.wav", *args])
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn(args[0], err.getvalue())
+
+    def test_sensible_layouts_are_accepted(self):
+        from wordalign.cli_v2 import _parse_args
+        cfg = _parse_args(["a.wav", "--max-lines", "1", "--cpl", "16",
+                           "--min-cue-ms", "0", "--max-duration-ms", "5000"])
+        self.assertEqual((cfg.max_lines, cfg.max_cpl), (1, 16))
+
+
 class TestPipelineMaxLines(unittest.TestCase):
 
     def _segments(self, max_lines):
