@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -611,18 +612,26 @@ _UPLOAD_CHUNK = 1 << 20           # bytes read from the socket at a time
 _MAX_PART_HEADER = 16 * 1024
 
 
+# filename="..." (quotes may hold ';' and \" escapes) or a bare token.
+_FILENAME_PARAM = re.compile(
+    r'(?:^|;)\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]*))', re.I)
+
+
 def _upload_filename(header: str) -> Optional[str]:
     """Safe file name from a part's Content-Disposition, or None (no file)."""
     for line in header.split("\r\n"):
         if not line.lower().startswith("content-disposition"):
             continue
-        for item in line.split(";"):
-            key, _, value = item.strip().partition("=")
-            if key.lower() == "filename":
-                # Browsers may send a full client path (C:\fakepath\x.wav).
-                name = value.strip().strip('"').strip("'").replace("\\", "/")
-                name = os.path.basename(name).strip()
-                return name if name not in ("", ".", "..") else "uploaded_file"
+        match = _FILENAME_PARAM.search(line)
+        if match is None:
+            return None
+        quoted, bare = match.groups()
+        name = quoted.replace('\\"', '"') if quoted is not None else bare
+        # Browsers may send a full client path (C:\fakepath\x.wav).
+        name = os.path.basename(name.strip().replace("\\", "/")).strip()
+        # Characters Windows cannot store in a file name.
+        name = re.sub(r'[<>:"|?*\x00-\x1f]', "_", name)
+        return name if name not in ("", ".", "..") else "uploaded_file"
     return None
 
 

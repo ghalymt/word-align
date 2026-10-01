@@ -86,6 +86,19 @@ class TestStreamMultipart(unittest.TestCase):
         for p in saved:
             self.assertEqual(Path(p).parent, Path(self.dir))
 
+    def test_semicolons_in_a_file_name_are_kept(self):
+        # Regression: the header was split on ';' before the quoted file
+        # name was read, so "Talk; part 1.srt" was saved as "Talk" -- and
+        # without its extension an .srt transcript was read as plain text.
+        saved, _ = self.parse(body([("t", "Talk; part 1.srt", b"1"),
+                                    ("a", "محاضرة; ١.mp4", b"2")]))
+        self.assertEqual([Path(p).name for p in saved],
+                         ["Talk; part 1.srt", "محاضرة; ١.mp4"])
+
+    def test_characters_windows_rejects_are_replaced(self):
+        saved, _ = self.parse(body([("f", 'a\\"b|c?.wav', b"1")]))
+        self.assertEqual(Path(saved[0]).name, "a_b_c_.wav")
+
     def test_truncated_upload_is_rejected(self):
         raw = body([("f", "x.bin", b"x" * 1000)])
         with self.assertRaises(ValueError):
