@@ -150,6 +150,15 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--version", action="version",
                    version=f"%(prog)s {__version__}")
     a = p.parse_args(argv)
+    for flag, value, lowest in (("--cpl", a.max_cpl, 1),
+                                ("--max-lines", a.max_lines, 1),
+                                ("--max-duration-ms", a.max_duration_ms, 1),
+                                ("--min-cue-ms", a.min_cue_ms, 0)):
+        if value is not None and value < lowest:
+            p.error(f"{flag} must be at least {lowest} (got {value})")
+    if (a.min_cue_ms is not None and a.max_duration_ms is not None
+            and a.min_cue_ms > a.max_duration_ms):
+        p.error("--min-cue-ms cannot be longer than --max-duration-ms")
 
     if a.gui:
         from .gui.server import run_server

@@ -151,12 +151,13 @@ def check_if_text_can_be_split_prettily(text: str) -> bool:
     total_len = count_visible_characters(text)
     if total_len <= _max_cpl:
         return True
-    if total_len > _cue_char_budget():
+    if total_len > _cue_char_budget() or _max_lines < 2:
         return False
     for i in range(1, len(text)):
         if text[i] == " " and evaluate_split(text, i, total_len) is not None:
             return True
-    return False
+    return any(_best_multiline_split(text, n) is not None
+               for n in range(3, _max_lines + 1))
 
 
 def find_word_boundary_near_limit(text: str, max_pos: int) -> int:
@@ -182,7 +183,7 @@ def balance_block_enhanced(text: str) -> str:
         return ""
 
     # An existing, already-valid two-line split is left exactly as it is.
-    if "\n" in stripped:
+    if "\n" in stripped and _max_lines >= 2:
         lines = stripped.split("\n")
         if len(lines) == 2:
             l1 = count_visible_characters(lines[0])
@@ -194,8 +195,8 @@ def balance_block_enhanced(text: str) -> str:
 
     flat = " ".join(stripped.replace("\n", " ").split())
     total = count_visible_characters(flat)
-    if total <= _max_cpl:
-        return flat
+    if total <= _max_cpl or _max_lines < 2:
+        return flat   # one line allowed: never invent a second one
 
     for ratio in (MIN_LINE_RATIO, RELAXED_LINE_RATIO):
         candidates = []
@@ -208,7 +209,98 @@ def balance_block_enhanced(text: str) -> str:
             best = min(candidates, key=lambda x: x["score"])
             return f"{best['l1']}\n{best['l2']}"
 
+    # Two lines cannot hold it cleanly; use more if the layout allows them.
+    for n_lines in range(3, _max_lines + 1):
+        lines = _best_multiline_split(flat, n_lines)
+        if lines is not None:
+            return "\n".join(lines)
+
     return flat   # no clean split -> leave long, visible for manual review
+
+
+# Upper bound on search steps per cue for 3+ lines. The search below only
+# follows splits whose lines fit, so real cues finish in a few thousand
+# steps; this guards against pathological input (hundreds of one-letter
+# tokens), where the best split found so far is used.
+_MAX_SPLIT_STEPS = 100_000
+
+_NO_LINE_START = ",;:!?…。！？‥"
+_NO_LINE_END = "([{«"
+
+
+def _split_score(lines: List[str]) -> float:
+    lengths = [count_visible_characters(line) for line in lines]
+    score = float(max(lengths) - min(lengths))
+    for prev, nxt in zip(lines, lines[1:]):
+        w1 = prev.split()[-1].lower().rstrip(",.;")
+        w2 = nxt.split()[0].lower().rstrip(",.;")
+        if w2 in PREFER_NEW_LINE_WORDS:
+            score -= 5
+        if w1 in PREFER_NEW_LINE_WORDS:
+            score += 15
+        if w2 in CLAUSE_MARKERS["conjunctions"]:
+            score -= 3
+    return score
+
+
+def _best_multiline_split(text: str, n_lines: int) -> Optional[List[str]]:
+    """Best split of *text* into exactly *n_lines* lines, each <= CPL.
+
+    Scored like the two-line balancer: the spread between the longest and
+    shortest line, with the same preferences for where a line may end
+    (articles/prepositions start a line rather than end it, conjunctions
+    are good line starts). Lines may not start with closing punctuation or
+    end with an opening bracket. Returns None if no split fits.
+
+    The search extends a line one word at a time and abandons it as soon as
+    it is too long or the rest cannot fit on the remaining lines, so it
+    only ever visits splits that can work -- enumerating every combination
+    of cut points blindly gave up on five-line cues before reaching one.
+    """
+    words = text.split()
+    if len(words) < n_lines:
+        return None
+    # Visible length of words[a:b] joined by spaces, in O(1).
+    prefix = [0]
+    for word in words:
+        prefix.append(prefix[-1] + count_visible_characters(word))
+
+    def width(a: int, b: int) -> int:
+        return prefix[b] - prefix[a] + (b - a - 1)
+
+    best: List = [None]           # [(score, lines)]
+    steps = [0]
+
+    def search(start: int, lines_left: int, cuts: List[int]) -> None:
+        if lines_left == 1:
+            last = width(start, len(words))
+            if last > _max_cpl or last < 2 or words[start][0] in _NO_LINE_START:
+                return
+            bounds = [0, *cuts, len(words)]
+            lines = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+            score = _split_score(lines)
+            if best[0] is None or score < best[0][0]:
+                best[0] = (score, lines)
+            return
+        if cuts and words[start][0] in _NO_LINE_START:
+            return
+        # Leave at least one word for each of the remaining lines.
+        for end in range(start + 1, len(words) - lines_left + 2):
+            steps[0] += 1
+            if steps[0] > _MAX_SPLIT_STEPS:
+                return
+            line_width = width(start, end)
+            if line_width > _max_cpl:
+                break                     # longer lines only get longer
+            if line_width < 2 or words[end - 1][-1] in _NO_LINE_END:
+                continue
+            rest_lines = lines_left - 1
+            if width(end, len(words)) > rest_lines * _max_cpl + rest_lines - 1:
+                continue                  # a longer line leaves less behind
+            search(end, rest_lines, cuts + [end])
+
+    search(0, n_lines, [])
+    return best[0][1] if best[0] else None
 
 
 def is_eligible_sentence(sentence_text: str, start_time: str,
@@ -594,7 +686,8 @@ def longest_line_length(content: str) -> int:
 
 def validate_srt_output(entries, name: str) -> Dict[str, int]:
     print(f"\nValidating {name}...")
-    issues = {"overlaps": 0, "gaps_large": 0, "duration_long": 0, "cpl_high": 0}
+    issues = {"overlaps": 0, "gaps_large": 0, "duration_long": 0, "cpl_high": 0,
+              "lines_high": 0}
     # Pairwise checks: only defined for entries that have a successor.
     for i in range(len(entries) - 1):
         current = entries[i]
@@ -609,6 +702,8 @@ def validate_srt_output(entries, name: str) -> Dict[str, int]:
             issues["duration_long"] += 1
         if longest_line_length(entry.content) > _max_cpl:
             issues["cpl_high"] += 1
+        if len(entry.content.splitlines()) > _max_lines:
+            issues["lines_high"] += 1
     print(f"  Issues found: {sum(issues.values())}")
     for issue_type, count in issues.items():
         if count > 0:
