@@ -37,7 +37,7 @@ The GUI runs in your browser (auto-opened), with **dark mode by default** — to
 
 1. Download the latest **`WordAlign-portable.zip`** from the [Releases page](https://github.com/ghalymt/word-align/releases).
 2. Unzip anywhere (e.g. `C:\WordAlign`).
-3. Double-click **`Launch WordAlign.vbs`** — a browser tab opens with the GUI after a short wait (first launch extracts the app, ~2–3 minutes).
+3. Double-click **`Launch WordAlign.vbs`** — the local server starts and a browser tab opens with the GUI.
 4. Drop in your audio/video, pick settings, hit **Run**.
 
 > Vosk models are the out-of-the-box engine. If you already have Vosk models installed (e.g. under `D:\Subtitle edit\Vosk`), set the folder once in the GUI's **Model Paths** panel — no downloads needed. The same applies to Whisper, Qwen and MFA models.
@@ -50,6 +50,7 @@ cd word-align
 py -m venv .venv
 .venv\Scripts\activate
 pip install -e .
+# Optional GPU backends: pip install -e ".[asr,qwen]"
 wordalign --gui            :: or just: wordalign
 :: CLI:
 wordalign --engines vosk -l en input.mp4 -o out
@@ -63,6 +64,7 @@ cd word-align
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+# Optional GPU backends: pip install -e ".[asr,qwen]"
 wordalign --gui            # opens the browser GUI
 # CLI:
 wordalign --engines vosk -l en input.mp4 -o out
@@ -83,7 +85,8 @@ Core options:
                            Also available: mfa, yamnet
   -l, --language CODE      Language code, e.g. en, ar, fr, de, es, pt (default: auto)
   -c, --cpl N              Max characters per subtitle line (default: 42)
-  --format FORMAT          Output formats: srt, vtt, txt, json (default: srt)
+  --format FORMAT          Transcript document: none, txt, docx, both (default: txt)
+  --profile NAME           Preset: cpu_only, fast, balanced, maximum_quality
 
 Quality & engines:
   --use-mfa                Enable MFA forced alignment for gap-filling
@@ -128,7 +131,7 @@ Raw ASR output is lowercase and punctuation-free, which is unusable as subtitles
 1. **Punctuation & capitalization restoration** — a local LLM (e.g. Gemma 4 12B via llama.cpp) rewrites each cue's text **without adding, removing, or reordering words**. A rule-based restorer (capitalization, terminal periods, lowercase *i*) is always available as a fallback, so the feature works out of the box.
 2. **Realignment** — words that drifted off their timestamps are re-aligned to the audio.
 3. **Deterministic checks** — line length (CPL), duplicate lines, hallucination risk, code-switch detection, confidence issues.
-4. **Recovery** — if a stage fails, the pipeline resumes from the last checkpoint instead of restarting.
+4. **Recovery metadata** — job stages and cache keys are persisted so interrupted runs can be inspected and resumed by the recovery API.
 
 Configuration is explicit — all paths are configurable, and the LLM is optional:
 
@@ -200,37 +203,41 @@ word-align/
 │   ├── profiles/          # Quality presets (cpu_only, fast, balanced, maximum_quality)
 │   ├── gui/               # Web GUI (app.html, server.py, waveform.py)
 │   └── benchmark.py       # Benchmark suite
-├── tests/                 # 151 tests: v1 (23) + v2 + todo + model paths + punctuation
+├── tests/                 # 164 tests: v1, v2, model paths, QA, and integration coverage
 └── docs/                  # ARCHITECTURE.md, DEVELOPER.md, USER_GUIDE.md
 ```
 
 **Key design rule:** the CLI and the GUI both call the same `PipelineRunner`. There is no separate pipeline for the GUI — what you see in the browser is exactly what the CLI does.
 
-**Plugins:** to add a new engine, drop a plugin into the registry with its manifest (name, capabilities, runtime). No edits to `cli.py`, `pipeline.py`, or GUI code. Engines can run **in-process**, as a **subprocess**, or as an **external service**.
+**Plugins:** the registry and adapters define the plugin contract for in-process, subprocess, and external engines. The current runner uses the built-in engine adapters for its production waterfall; new adapters can be registered and exposed through the API before their operations are promoted into the waterfall.
 
 ---
 
 ## 🧪 Tests
 
 ```bash
-pip install -r requirements.txt
-python -m pytest tests/ -q     # 151 tests, all passing
+pip install -e ".[dev]"
+python -m pytest tests/ -q
 ```
+
+Individual test modules can also be run directly with `python tests/test_*.py` when pytest is not installed.
 
 The 23 original v1 tests still pass unchanged — the v1 algorithms (`align.py`, `ensemble.py`, `segment.py`) are preserved untouched.
 
 ---
 
 ## 📦 Building the Portable Package (Windows)
-
 ```powershell
 # from the repo root, with Python + PyInstaller installed
-pyinstaller build.spec --noconfirm
-# produces dist\WordAlign.exe (single file) — wrap with dist\WordAlign-portable\
-# which includes Launch WordAlign.vbs + README.txt
+python build.py --zip --copy-models
+# output: dist\WordAlign\WordAlign.exe and Launch WordAlign.vbs
 ```
 
-The result is a fully offline, double-clickable app. The GUI runs a local server on `http://127.0.0.1:5575` and opens your browser automatically; nothing is uploaded anywhere.
+`build.py` produces a Windows onedir bundle and links/copies the local `models/` tree when
+available. Use `--copy-models` for a relocatable release ZIP. The heavy Qwen and WhisperX
+virtual environments are staged separately with `powershell -File scripts\build_backends.ps1`
+(or `build_windows.ps1 -BuildBackends`); MFA remains an optional external binary.
+The resulting `Launch WordAlign.vbs` starts the local GUI without requiring Python.
 
 ---
 

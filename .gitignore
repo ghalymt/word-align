@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 build/
+build_temp/
 dist/
 # Audio / media inputs & outputs
 *.wav
@@ -19,5 +20,20 @@ dist/
 temp_vosk_chunks_*/
 wordalign_vosk_*/
 mfa_surgical_*/
-models/
+# Local model store (tens of GB) — root only. Must stay anchored with a
+# leading slash: a bare "models/" also ignores the wordalign/models/
+# Python package, which the code imports.
+/models/
 .cache/
+.wordalign/
+.wordalign_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Local build / smoke-test scratch (never published)
+*.log
+*.err
+/HANDOFF.md
+/test_*.py
+/test_*.ps1
+/test_*.txt

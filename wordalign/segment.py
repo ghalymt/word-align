@@ -10,7 +10,7 @@ prevents greedy over-merging:
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .config import (CLAUSE_MARKERS, ITERATION_START, MAX_CPL,
                      MAX_DURATION_MS, MIN_LINE_RATIO, PREFER_NEW_LINE_WORDS)
@@ -239,12 +239,47 @@ def shift_dangling_words(segments: List[Dict]) -> List[Dict]:
 
 
 def parse_human_transcript_to_srt_segments(
-        transcript_text: str, aligned_words: List[Dict]) -> List[Dict]:
-    """Map each transcript line onto its aligned word span."""
+        transcript_text: str, aligned_words: List[Dict],
+        cue_boundaries: Optional[List[Tuple[int, int]]] = None) -> List[Dict]:
+    """Map each transcript line onto its aligned word span.
+
+    If ``cue_boundaries`` is provided, those (start, end) word-index ranges
+    are used to build segments directly — this preserves the segmentation
+    of an input SRT transcript instead of letting the iterative merger
+    collapse neighbouring phrases together.
+    """
     print("Parsing transcript into segments...")
     segments: List[Dict] = []
     lines = [ln.strip() for ln in transcript_text.split("\n") if ln.strip()]
     cursor = 0
+
+    # Fast path: respect the human's cue boundaries from an input SRT.
+    if cue_boundaries:
+        for cue_idx, (start, end) in enumerate(cue_boundaries):
+            if end > len(aligned_words):
+                # Out of range — transcript has more words than aligned.
+                # Fall back to whatever range is still available.
+                end = min(end, len(aligned_words))
+            if start >= end:
+                continue
+            first = aligned_words[start]
+            last = aligned_words[end - 1]
+            t0 = first.get("start")
+            t1 = last.get("end")
+            if t0 is None or t1 is None:
+                print(f"  [skip] cue {cue_idx + 1}: missing timestamps")
+                continue
+            segments.append({
+                "index": cue_idx + 1,
+                "start": ms_to_time(int(t0 * 1000)),
+                "end": ms_to_time(int(t1 * 1000)),
+                "start_source": first.get("source"),
+                "end_source": last.get("source"),
+                "text": " ".join(w["word"] for w in aligned_words[start:end]),
+            })
+        print(f"[ok] Created {len(segments)} segments from SRT cue boundaries")
+        return segments
+
     for line_idx, line in enumerate(lines):
         if re.fullmatch(r"\s*\[.*?\]\s*", line):
             continue

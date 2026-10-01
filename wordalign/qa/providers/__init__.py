@@ -54,7 +54,15 @@ class LocalModelProvider(LLMQAProvider):
                  cache_dir: Optional[str] = None):
         self.model_name = model_name
         self.device = device
-        self.cache_dir = cache_dir or os.environ.get("HF_HOME")
+        if cache_dir:
+            self.cache_dir = cache_dir
+        elif os.environ.get("HF_HOME"):
+            self.cache_dir = os.environ["HF_HOME"]
+        else:
+            # Default to the project's local <models>/huggingface/hub so
+            # the LLM QA provider never reaches for ~/.cache.
+            from ...models.paths import _project_models_root
+            self.cache_dir = str(_project_models_root() / "huggingface" / "hub")
         self._model = None
         self._tokenizer = None
 

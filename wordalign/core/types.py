@@ -90,4 +90,7 @@ class PipelineResult:
     consensus: Optional[list[WordResult]] = None
     statistics: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    qa_issues: list[Any] = field(default_factory=list)
     job_manifest_path: Optional[str] = None
+    error: Optional[str] = None
+    cancelled: bool = False

@@ -17,6 +17,7 @@ import re
 from collections import defaultdict
 from datetime import timedelta
 from typing import Dict, List
+from urllib.request import urlretrieve
 
 import srt
 
@@ -24,10 +25,11 @@ from .config import MAX_DURATION_MS, TAG_MAP
 from .utils import TIMECODE_TAG_RE
 
 try:
-    import librosa
+    import numpy as np
+    import soundfile as sf
     import psutil
-    import tensorflow as tf
     import tensorflow_hub as hub
+    from scipy.signal import resample_poly
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
@@ -114,15 +116,55 @@ def combine_and_sort_srt(sentence_entries, tag_entries):
 
 
 def _load_yamnet():
+    from .models.paths import _project_models_root
+
     print("Loading YAMNet model...")
-    model = hub.load("https://tfhub.dev/google/yamnet/1")
-    class_map_path = tf.keras.utils.get_file(
-        "yamnet_class_map.csv",
-        "https://raw.githubusercontent.com/tensorflow/models/master/"
-        "research/audioset/yamnet/yamnet_class_map.csv")
-    with open(class_map_path) as fh:
+    model_root = _project_models_root() / "yamnet"
+    model_root.mkdir(parents=True, exist_ok=True)
+    local_model = model_root / "saved_model"
+    if (local_model / "saved_model.pb").is_file():
+        model = hub.load(str(local_model))
+    else:
+        model = hub.load("https://tfhub.dev/google/yamnet/1")
+    class_map_path = model_root / "yamnet_class_map.csv"
+    if not class_map_path.is_file():
+        urlretrieve(
+            "https://raw.githubusercontent.com/tensorflow/models/master/"
+            "research/audioset/yamnet/yamnet_class_map.csv",
+            class_map_path)
+    with class_map_path.open(encoding="utf-8", newline="") as fh:
         class_names = [row["display_name"] for row in csv.DictReader(fh)]
     return model, class_names
+
+
+def _load_audio_16k(audio_path: str):
+    try:
+        audio, sample_rate = sf.read(audio_path, dtype="float32", always_2d=False)
+    except Exception:
+        import av
+        container = av.open(audio_path)
+        stream = next(item for item in container.streams if item.type == "audio")
+        resampler = av.AudioResampler(format="fltp", layout="mono", rate=16000)
+        chunks = []
+        for frame in container.decode(stream):
+            for resampled in resampler.resample(frame):
+                chunks.append(resampled.to_ndarray().astype(np.float32).reshape(-1))
+        for resampled in resampler.resample(None):
+            chunks.append(resampled.to_ndarray().astype(np.float32).reshape(-1))
+        container.close()
+        if not chunks:
+            raise ValueError(f"No audio frames found in {audio_path}")
+        return np.concatenate(chunks)
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    sample_rate = int(sample_rate)
+    if sample_rate != 16000:
+        from math import gcd
+        divisor = gcd(16000, sample_rate)
+        audio = resample_poly(audio, 16000 // divisor,
+                              sample_rate // divisor).astype(np.float32)
+    return audio
 
 
 def detect_audio_tags_yamnet(audio_path: str, human_tags: set,
@@ -157,9 +199,9 @@ def detect_audio_tags_yamnet(audio_path: str, human_tags: set,
         return []
     print(f"YAMNet searching for: {', '.join(sorted(tags_to_search))}")
     try:
-        audio_16k, _ = librosa.load(audio_path, sr=16000)
+        audio_16k = _load_audio_16k(audio_path)
     except Exception as exc:
-        print(f"[warn] librosa load failed: {exc}")
+        print(f"[warn] audio load failed: {exc}")
         return []
     scores, _, _ = model(audio_16k)
     del audio_16k

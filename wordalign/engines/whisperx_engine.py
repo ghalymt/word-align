@@ -2,11 +2,25 @@
 
 Uses language-specific wav2vec2 checkpoints where a stronger one than
 WhisperX's default is known, falling back to WhisperX auto-selection.
+
+WhisperX runs out-of-process via :mod:`wordalign.engines._whisperx_worker`,
+because the whisperx stack (whisperx, faster-whisper, ctranslate2, optional
+pyannote) has version pins that clash with the rest of word-align's
+dependencies. The worker is invoked in the venv pointed to by
+``WORDALIGN_WHISPERX_PYTHON`` (or it falls back to in-process when
+``whisperx`` happens to be importable from the current interpreter).
+
+Returns ``(word_segments, audio_events)`` matching the legacy in-process
+contract so the pipeline is agnostic to where WhisperX actually ran.
 """
 from __future__ import annotations
 
-import gc
+import json
+import os
 import re
+import subprocess
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 ALIGNMENT_MODEL_MAP = {
@@ -38,38 +52,152 @@ ALIGNMENT_MODEL_MAP = {
 
 _EVENT_RE = re.compile(r"\[(.*?)\]|\((.*?)\)")
 
+SENTINEL = "__WA_WHISPERX_JSON__"
+_WORKER = Path(__file__).with_name("_whisperx_worker.py")
 
-def run_whisperx(audio_path: str, language: str,
+
+def _parse_worker_output(stdout: str) -> Dict:
+    """Pull the sentinel-tagged JSON payload out of worker stdout."""
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith(SENTINEL):
+            return json.loads(line[len(SENTINEL):])
+    raise ValueError("WhisperX worker produced no JSON payload")
+
+
+def _words_from_payload(payload: Dict) -> List[Dict]:
+    """Normalize the payload into word-align word dicts, dropping untimed ones."""
+    out: List[Dict] = []
+    for w in payload.get("words", []):
+        if w.get("start") is None or w.get("end") is None:
+            continue
+        text = str(w.get("word", "")).strip()
+        if not text:
+            continue
+        out.append({
+            "word": text,
+            "start": float(w["start"]),
+            "end": float(w["end"]),
+            "conf": float(w.get("conf", 0.9)),
+        })
+    return out
+
+
+def run_whisperx(audio_path: str,
+                 language: str,
                  model_size: str = "large-v3",
                  device: Optional[str] = None,
-                 models_dir: Optional[str] = None
+                 models_dir: Optional[str] = None,
+                 cancel_event=None
                  ) -> Tuple[List[Dict], List[Dict]]:
     """Return ``(word_segments, audio_events)``.
 
-    ``word_segments`` items carry ``word``/``start``/``end`` and, when
-    WhisperX provides one, an alignment ``score`` (exposed as ``conf``).
-
-    If *models_dir* is provided, sets ``HF_HOME`` temporarily so whisperx
-    finds models in the custom directory.
+    Prefers the out-of-process worker (env ``WORDALIGN_WHISPERX_PYTHON``).
+    Falls back to in-process only if ``whisperx`` is importable in the
+    current interpreter and no separate venv is configured. Returns
+    ``([], [])`` (never raises) on any failure, so the ensemble simply
+    proceeds without WhisperX.
     """
     print("\n" + "=" * 60 + "\nRUNNING WHISPERX (HIGH ACCURACY MODE)")
+    if cancel_event is not None and cancel_event.is_set():
+        return [], []
+
+    whisperx_python = os.environ.get("WORDALIGN_WHISPERX_PYTHON")
+    models_dir = models_dir or os.environ.get("WORDALIGN_WHISPERX_MODELS")
+
+    if not whisperx_python:
+        if getattr(sys, "frozen", False):
+            print("[info] WhisperX skipped: the frozen build has no dedicated "
+                  "WhisperX venv; set WORDALIGN_WHISPERX_PYTHON to enable it.")
+            return [], []
+        # No dedicated venv configured -- only workable if whisperx happens
+        # to be importable in the interpreter we're already running under.
+        try:
+            import whisperx  # noqa: F401
+            return _run_whisperx_inproc(audio_path, language, model_size,
+                                       device, models_dir, cancel_event)
+        except ImportError:
+            print("[info] WhisperX skipped: set WORDALIGN_WHISPERX_PYTHON to "
+                  "the venv that has whisperx (or `pip install whisperx` here).")
+            return [], []
+
+    args = [whisperx_python, str(_WORKER),
+            "--audio", str(audio_path),
+            "--language", language,
+            "--model-size", model_size]
+    if device:
+        args += ["--device", device]
+    if models_dir:
+        args += ["--models-dir", models_dir]
+
+    try:
+        proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                if cancel_event is not None and cancel_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    print("[info] WhisperX worker cancelled.")
+                    return [], []
+    except OSError as exc:
+        print(f"[warn] WhisperX worker could not launch ({whisperx_python}): {exc}")
+        return [], []
+
+    if proc.returncode != 0:
+        tail = "\n".join(stderr.strip().splitlines()[-5:])
+        print(f"[warn] WhisperX worker failed (exit {proc.returncode}):\n{tail}")
+        return [], []
+
+    try:
+        payload = _parse_worker_output(stdout)
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"[warn] WhisperX worker output unparseable: {exc}")
+        return [], []
+
+    words = _words_from_payload(payload)
+    events = list(payload.get("events", []))
+    print(f"[ok] WhisperX: {len(words)} words, {len(events)} events "
+          f"(lang={payload.get('language')}).")
+    return words, events
+
+
+def _run_whisperx_inproc(audio_path: str,
+                         language: str,
+                         model_size: str,
+                         device: Optional[str],
+                         models_dir: Optional[str],
+                         cancel_event=None
+                         ) -> Tuple[List[Dict], List[Dict]]:
+    """In-process WhisperX fallback (only used when no worker venv is set).
+
+    Returns ``([], [])`` on any failure so the ensemble keeps moving.
+    """
+    import gc  # noqa: F401  -- used by whisperx/ctranslate2 internals
     try:
         import torch
         import whisperx
+    except ImportError:
+        print("[info] WhisperX skipped: not importable in this interpreter.")
+        return [], []
 
-        gc.collect()
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            return [], []
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         compute_type = "float16" if device == "cuda" else "int8"
         print(f"Device: {device} | compute: {compute_type} | model: {model_size} "
               f"| language: {language}")
 
-        # Allow custom model directory override
-        _prev_hf = None
         if models_dir:
-            _prev_hf = os.environ.get("HF_HOME")
             os.environ["HF_HOME"] = models_dir
-            print(f"Using custom model dir: {models_dir}")
 
         model = whisperx.load_model(model_size, device,
                                     compute_type=compute_type,
@@ -77,6 +205,8 @@ def run_whisperx(audio_path: str, language: str,
         audio = whisperx.load_audio(audio_path)
         print("Transcribing...")
         result = model.transcribe(audio, batch_size=8, language=language)
+        if cancel_event is not None and cancel_event.is_set():
+            return [], []
         del model
         gc.collect()
         if device == "cuda":
@@ -90,10 +220,12 @@ def run_whisperx(audio_path: str, language: str,
                 language_code=language, device=device, model_name=model_name)
         except Exception as exc:
             print(f"[warn] {model_name} unavailable ({exc}); "
-                  "falling back to WhisperX auto-selection.")
+                  f"falling back to WhisperX auto-selection.")
             model_a, metadata = whisperx.load_align_model(
                 language_code=language, device=device)
         print("Aligning timestamps...")
+        if cancel_event is not None and cancel_event.is_set():
+            return [], []
         aligned_result = whisperx.align(
             result["segments"], model_a, metadata, audio, device,
             return_char_alignments=False, interpolate_method="nearest")
@@ -122,5 +254,8 @@ def run_whisperx(audio_path: str, language: str,
         traceback.print_exc()
         return [], []
     finally:
-        if models_dir and _prev_hf is not None:
-            os.environ["HF_HOME"] = _prev_hf
+        # The legacy function used to restore HF_HOME here; nothing else
+        # needs cleanup because the in-process path doesn't take an
+        # override-and-restore promise anymore (the worker version owns
+        # its env entirely).
+        pass

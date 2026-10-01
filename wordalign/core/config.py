@@ -6,6 +6,7 @@ that are passed through the pipeline. This makes multi-job operation safe.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -46,7 +47,7 @@ class TimingConfig:
     """Timing waterfall configuration."""
     strategy: str = "fill_only"
     order: list[str] = field(default_factory=lambda: [
-        "vosk", "rough_srt", "whisperx", "mfa", "interpolation"
+        "vosk", "rough_srt", "qwen", "whisperx", "mfa", "interpolation"
     ])
 
 
@@ -61,6 +62,13 @@ class ExportConfig:
 
 
 @dataclass
+class QAConfig:
+    """Quality-review settings loaded from a profile."""
+    enabled: bool = False
+    signals: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class PipelineProfile:
     """A complete pipeline configuration — loaded from JSON or built programmatically."""
     schema_version: int = 1
@@ -71,6 +79,7 @@ class PipelineProfile:
     timing: TimingConfig = field(default_factory=TimingConfig)
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
+    qa: QAConfig = field(default_factory=QAConfig)
 
     @classmethod
     def from_dict(cls, d: dict) -> "PipelineProfile":
@@ -79,6 +88,7 @@ class PipelineProfile:
         trans = d.get("transcription", {})
         timing = d.get("timing", {})
         export = d.get("export", {})
+        qa = d.get("qa", {})
         return cls(
             schema_version=d.get("schema_version", 1),
             name=d.get("name", "Default"),
@@ -89,7 +99,7 @@ class PipelineProfile:
             timing=TimingConfig(
                 strategy=timing.get("strategy", "fill_only"),
                 order=timing.get("order", [
-                    "vosk", "rough_srt", "whisperx", "mfa", "interpolation"])),
+                    "vosk", "rough_srt", "qwen", "whisperx", "mfa", "interpolation"])),
             segmentation=SegmentationConfig(
                 max_cpl=seg.get("max_cpl", 42),
                 max_lines=seg.get("max_lines", 2),
@@ -101,6 +111,9 @@ class PipelineProfile:
                 transcript_format=export.get("transcript_format", "txt"),
                 transcript_timestamps=export.get("transcript_timestamps", True),
                 tags=export.get("tags", False)),
+            qa=QAConfig(
+                enabled=qa.get("enabled", False),
+                signals=qa.get("signals", {})),
         )
 
     @classmethod
@@ -128,6 +141,7 @@ class PipelineProfile:
             "balanced": cls(
                 name="Balanced",
                 description="WhisperX + Qwen + Vosk, full waterfall",
+                qa=QAConfig(enabled=True),
                 transcription=TranscriptionConfig(engines=[
                     {"plugin": "whisperx", "enabled": True, "model": "large-v3",
                      "weight": 1.0, "backbone": True},
@@ -138,6 +152,7 @@ class PipelineProfile:
             "maximum_quality": cls(
                 name="Maximum Quality",
                 description="All engines, full waterfall, QA",
+                qa=QAConfig(enabled=True),
                 transcription=TranscriptionConfig(engines=[
                     {"plugin": "whisperx", "enabled": True, "model": "large-v3",
                      "weight": 1.0, "backbone": True},
@@ -148,6 +163,7 @@ class PipelineProfile:
             "cpu_only": cls(
                 name="CPU Only",
                 description="Vosk only, no GPU required",
+                qa=QAConfig(enabled=True),
                 transcription=TranscriptionConfig(engines=[
                     {"plugin": "vosk", "enabled": True, "weight": 1.0,
                      "backbone": True},
@@ -169,9 +185,11 @@ class JobContext:
     output_base: Optional[str] = None
     profile: PipelineProfile = field(default_factory=PipelineProfile)
     started_at: float = 0.0
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
     def check_cancel(self, stage: str = "") -> None:
         """Raise PipelineCancelled if cancellation was requested."""
         if self.cancel_requested:
+            self.cancel_event.set()
             from .errors import PipelineCancelled
             raise PipelineCancelled(f"Cancelled at: {stage}")

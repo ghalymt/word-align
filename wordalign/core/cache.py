@@ -11,13 +11,14 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .fingerprint import AudioFingerprint, engine_cache_key, fingerprint_audio
+from .fingerprint import engine_cache_key, fingerprint_audio
 
 
 class StageCache:
@@ -33,13 +34,19 @@ class StageCache:
 
     @staticmethod
     def _default_cache_dir() -> str:
-        return os.path.join(os.path.expanduser("~"), ".wordalign", "cache")
+        # Fully portable: keep the stage cache inside the project so nothing
+        # leaks to the user's home directory. Honor WORDALIGN_CACHE for
+        # power-users who want a different location.
+        if os.environ.get("WORDALIGN_CACHE"):
+            return os.environ["WORDALIGN_CACHE"]
+        from ..models.paths import _project_root
+        return str(_project_root() / ".wordalign_cache")
 
     def _key_path(self, key: str) -> Path:
-        # Use first 2 chars as subdirectory to avoid huge flat dirs
-        sub = self.cache_dir / key[:2]
+        safe_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        sub = self.cache_dir / safe_key[:2]
         sub.mkdir(exist_ok=True)
-        return sub / f"{key}.json"
+        return sub / f"{safe_key}.json"
 
     def get(self, key: str) -> Optional[dict[str, Any]]:
         """Retrieve cached output, or None if missing/expired."""

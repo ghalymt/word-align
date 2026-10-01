@@ -26,12 +26,24 @@ class VoskAdapter(EnginePlugin):
         missing = []
         try:
             from vosk import Model  # noqa: F401
-        except ImportError:
+        except Exception:
             missing.append("vosk")
+        from ...models.paths import ModelPaths
+        from ...models.validator import ModelValidator
+        model_root = ModelPaths().resolve("vosk")
+        valid_model = False
+        if model_root:
+            validator = ModelValidator()
+            valid_model = any(
+                child.is_dir() and validator.validate(child, "vosk")["valid"]
+                for child in model_root.iterdir()
+            )
+        if not valid_model:
+            missing.append("vosk_model")
         if missing:
             return HealthStatus(ready=False, runtime_status="missing",
                                 missing_components=missing,
-                                message="Install: pip install vosk")
+                                message="Install Vosk and unpack a model under models/vosk")
         return HealthStatus(ready=True, runtime_status="ready")
 
     def transcribe(self, request) -> dict:

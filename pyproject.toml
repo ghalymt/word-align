@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wordalign"
+version = "2.0.0"
+description = "Word-accurate subtitle alignment and transcription for audio and video"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dependencies = [
+    "langdetect>=1.0.9",
+    "librosa>=0.10",
+    "psutil>=5.9",
+    "srt>=3.5",
+    "vosk>=0.3.45",
+]
+
+[project.optional-dependencies]
+asr = [
+    "torch>=2.1",
+    "whisperx>=3.1",
+]
+qwen = ["qwen-asr>=0.0.6"]
+mfa = ["montreal-forced-aligner>=3.4", "textgrid>=1.5"]
+llm = ["transformers>=4.40"]
+docx = ["python-docx>=1.1"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+wordalign = "wordalign.cli_v2:main"
+
+[tool.setuptools.packages.find]
+include = ["wordalign*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+wordalign = ["data/*.json", "profiles/*.json", "gui/*.html"]

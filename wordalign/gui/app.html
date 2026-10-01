@@ -132,7 +132,7 @@ input[type=file]{display:none}
         <p><strong>Transcript</strong> <small>(optional)</small></p>
         <p>Your verbatim text for reference alignment</p>
         <div class="name" id="transcript-name"></div>
-        <input type="file" id="transcript-file" accept=".txt,text/plain">
+        <input type="file" id="transcript-file" accept=".txt,.srt,text/plain">
       </div>
     </div>
 
@@ -140,6 +140,10 @@ input[type=file]{display:none}
       <strong>With transcript:</strong> time-align every word to the audio.<br>
       <strong>Without transcript:</strong> engines vote on what was said — best with WhisperX + Qwen + Vosk.
     </p>
+    <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--t3);margin-top:10px">
+      <input type="checkbox" id="allow-mismatch" style="width:auto">
+      Continue if the transcript word count is incompatible with the media duration
+    </label>
   </div>
 
   <!-- STEP 2: Settings -->
@@ -265,7 +269,7 @@ input[type=file]{display:none}
         <span id="progress-pct">0%</span>
       </div>
       <div class="log" id="log"></div>
-      <button class="btn btn-danger" onclick="cancelPipeline()" style="margin-top:8px;">⏹ Cancel</button>
+      <button class="btn btn-danger" id="cancel-btn" onclick="cancelPipeline()" style="margin-top:8px;">⏹ Cancel</button>
     </div>
 
     <div class="output-section" id="output-section">
@@ -300,10 +304,41 @@ function toggleTheme() {
   applyTheme(theme);
 })();
 
-const API = 'http://127.0.0.1:5575/api';
+const API = (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+  ? window.location.origin + '/api'
+  : 'http://127.0.0.1:5575/api';
 let backend = false;
 let running = false;
 let preset = 'cpu_only';
+let currentJobId = null;
+let pollTimer = null;
+let lastWarningCount = 0;
+let enginesInitialized = false;
+const ACTIVE_JOB_KEY = 'wordalign-active-job';
+const STAGE_LABELS = {init:'Starting',primary:'Transcribing',ensemble:'Transcribing',vosk:'Vosk timing',waterfall:'Timing waterfall',
+  whisperx:'WhisperX timing',qwen:'Qwen timing',mfa:'MFA alignment',interpolation:'Interpolating',segmentation:'Segmenting',qa:'Quality checks',output:'Writing files'};
+
+function getStoredJobId() {
+  try { return localStorage.getItem(ACTIVE_JOB_KEY); } catch(e) { return null; }
+}
+function storeJobId(jobId) {
+  try { localStorage.setItem(ACTIVE_JOB_KEY, jobId); } catch(e) {}
+}
+function clearStoredJob() {
+  try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch(e) {}
+}
+function appendLog(message, kind='i') {
+  const log = document.getElementById('log');
+  const item = document.createElement('div');
+  item.className = kind;
+  item.textContent = message;
+  log.appendChild(item);
+  log.scrollTop = log.scrollHeight;
+}
+function stopWatching() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
 
 // ==================== FILE HANDLING ====================
 ['audio-file','transcript-file'].forEach(id => {
@@ -335,8 +370,44 @@ document.querySelectorAll('.preset-card').forEach(c => {
     document.querySelectorAll('.preset-card').forEach(x => x.classList.remove('selected'));
     c.classList.add('selected');
     preset = c.dataset.preset;
+    applyPreset(preset);
   });
 });
+
+function applyPreset(name) {
+  const selected = {
+    cpu_only: ['vosk'],
+    fast: ['vosk', 'whisperx'],
+    balanced: ['vosk', 'qwen_asr', 'whisperx'],
+    maximum_quality: ['vosk', 'qwen_asr', 'whisperx', 'mfa', 'yamnet'],
+  }[name] || ['vosk'];
+  document.querySelectorAll('[data-engine-id]').forEach(input => {
+    const enabled = selected.includes(input.dataset.engineId);
+    input.checked = enabled && input.dataset.ready === 'true';
+    input.disabled = false;
+  });
+  updateRunBtn();
+}
+
+function getEngineFlags() {
+  const flags = {};
+  document.querySelectorAll('[data-engine-id]').forEach(input => {
+    flags[input.dataset.engineId] = input.checked;
+  });
+  if (Object.keys(flags).length) {
+    if ('qwen_asr' in flags) {
+      flags.qwen = flags.qwen_asr;
+      delete flags.qwen_asr;
+    }
+    return flags;
+  }
+  return {
+    vosk: preset === 'cpu_only' || preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality',
+    qwen: preset === 'balanced' || preset === 'maximum_quality',
+    whisperx: preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality',
+    mfa: preset === 'maximum_quality',
+  };
+}
 
 // ==================== API ====================
 async function get(path) {
@@ -349,7 +420,14 @@ async function checkBackend() {
   const el = document.getElementById('backend-status');
   el.textContent = backend ? '● Connected' : '● Backend Offline';
   el.className = 'status ' + (backend ? 'status-on' : 'status-off');
-  if (backend) { loadEngines(); checkPreflight(); loadModelPaths(); }
+  if (backend) {
+    if (!enginesInitialized) {
+      loadEngines();
+    }
+    checkPreflight();
+    loadModelPaths();
+    resumeStoredJob();
+  }
 }
 
 async function loadModelPaths() {
@@ -374,6 +452,7 @@ async function loadModelPaths() {
 async function loadEngines() {
   const data = await get('/engines');
   if (!data?.engines) return;
+  enginesInitialized = true;
   const container = document.getElementById('engine-checklist');
   const names = {whisperx:'WhisperX',vosk:'Vosk',qwen_asr:'Qwen ASR',mfa:'MFA',yamnet:'YAMNet Audio Events'};
   const descs = {whisperx:'GPU transcription · best accuracy',vosk:'CPU transcription · fast word timing',
@@ -383,10 +462,10 @@ async function loadEngines() {
     <div class="engine-row">
       <div><div class="en">${names[e.id]||e.name}</div><div class="em">${descs[e.id]||''}</div></div>
       <span style="font-size:11px;margin-right:8px;color:${e.ready?'var(--green)':'var(--amber)'}">${e.ready?'✔ Ready':'⚠ Not installed'}</span>
-      <label class="tgl"><input type="checkbox" ${e.ready?'checked':''} onchange="updateRunBtn()"><span class="s"></span></label>
+      <label class="tgl"><input type="checkbox" data-engine-id="${e.id}" data-ready="${e.ready}" ${e.ready?'checked':''} onchange="updateRunBtn()"><span class="s"></span></label>
     </div>
   `).join('');
-  updateRunBtn();
+  applyPreset(preset);
 }
 
 async function checkPreflight() {
@@ -426,8 +505,66 @@ async function uploadFiles() {
     if (!r.ok) return null;
     const data = await r.json();
     // Return mapping: first file = audio, second (if exists) = transcript
-    return { audio_temp: data.files?.[0], transcript_temp: data.files?.[1] || null };
+    return { audio_temp: data.files?.[0], transcript_temp: data.files?.[1] || null, upload_id: data.upload_id || null };
   } catch(e) { return null; }
+}
+
+function startWatchingJob(jobId, resumed=false) {
+  if (!jobId) return;
+  stopWatching();
+  currentJobId = jobId;
+  storeJobId(jobId);
+  running = true;
+  lastWarningCount = 0;
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('progress').style.display = 'block';
+  if (resumed) appendLog(`Resuming job ${jobId}...`);
+  let lastStage = '';
+  let pct = 5;
+  pollTimer = setInterval(async () => {
+    const data = await get('/job/' + jobId);
+    if (!data?.job) return;
+    const job = data.job;
+    const stageName = data.stages?.length ? data.stages[data.stages.length - 1].stage_name : 'running';
+    const displayName = STAGE_LABELS[stageName] || stageName;
+    if (displayName !== lastStage) {
+      lastStage = displayName;
+      pct = Math.min(pct + 15, 95);
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('progress-stage').textContent = displayName;
+      document.getElementById('progress-pct').textContent = pct + '%';
+      appendLog(`[${displayName}] Processing...`);
+    }
+    const warnings = Array.isArray(job.warnings) ? job.warnings : [];
+    if (warnings.length > lastWarningCount) {
+      warnings.slice(lastWarningCount).forEach(warning => appendLog(warning, 'w'));
+      lastWarningCount = warnings.length;
+    }
+    if (job.status === 'completed') {
+      stopWatching();
+      clearStoredJob();
+      document.getElementById('progress-fill').style.width = '100%';
+      document.getElementById('progress-stage').textContent = 'Complete!';
+      document.getElementById('progress-pct').textContent = '100%';
+      appendLog(`DONE: ${job.word_count} words, ${job.segment_count} segments`, 'ok');
+      showOutput(job.output_files || []);
+      currentJobId = null;
+      running = false;
+      updateRunBtn();
+    } else if (job.status === 'failed' || job.status === 'cancelled') {
+      stopWatching();
+      clearStoredJob();
+      appendLog(`${job.status.toUpperCase()}: ${job.error || 'Unknown error'}`, 'e');
+      currentJobId = null;
+      running = false;
+      updateRunBtn();
+    }
+  }, 2000);
+}
+
+async function resumeStoredJob() {
+  const jobId = getStoredJobId();
+  if (jobId && !running && !pollTimer) startWatchingJob(jobId, true);
 }
 
 async function startPipeline() {
@@ -454,12 +591,20 @@ async function startPipeline() {
   log.innerHTML += '<div class="ok">Files uploaded. Starting pipeline...</div>\n';
   log.scrollTop = log.scrollHeight;
 
+  const engineFlags = getEngineFlags();
   const body = {
     audio_temp_path: paths.audio_temp,
     transcript_temp_path: paths.transcript_temp,
+    allow_transcript_mismatch: document.getElementById('allow-mismatch').checked,
+    upload_id: paths.upload_id,
     language: document.getElementById('language').value || null,
     max_cpl: parseInt(document.getElementById('max-cpl').value),
-    use_vosk: true, use_mfa: false,
+    profile: preset,
+    use_vosk: !!engineFlags.vosk,
+    use_qwen: !!engineFlags.qwen,
+    use_whisperx: !!engineFlags.whisperx,
+    use_mfa: !!engineFlags.mfa,
+    use_tags: !!engineFlags.yamnet,
     model_paths: {
       vosk_models_dir: document.getElementById('vosk-models').value || null,
       whisper_models_dir: document.getElementById('whisper-models').value || null,
@@ -478,66 +623,30 @@ async function startPipeline() {
   const result = await (async () => {
     try {
       const r = await fetch(API+'/run', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-      return r.ok ? r.json() : null;
+      const data = await r.json().catch(() => null);
+      return data;
     } catch(e) { return null; }
   })();
 
   if (!result?.job_id) {
-    log.innerHTML += '<div class="e">Failed to start pipeline.</div>\n';
+    log.innerHTML += `<div class="e">Failed to start pipeline: ${result?.error || 'Unknown error'}</div>\n`;
     running = false;
     document.getElementById('run-btn').disabled = false;
     return;
   }
 
-  log.innerHTML += `<div class="i">Job started: ${result.job_id}</div>\n`;
-  const stages = {init:'Starting',ensemble:'Transcribing',vosk:'Vosk timing',waterfall:'Timing waterfall',
-    whisperx:'WhisperX timing',mfa:'MFA alignment',interpolation:'Interpolating',segmentation:'Segmenting',output:'Writing files'};
-  let lastStage = '';
-  let pct = 5;
-
-  const poll = setInterval(async () => {
-    const data = await get('/job/'+result.job_id);
-    if (!data?.job) return;
-    const job = data.job;
-    const stageName = data.stages?.length ? data.stages[data.stages.length-1].stage_name : 'running';
-    const displayName = stages[stageName] || stageName;
-
-    if (displayName !== lastStage) {
-      lastStage = displayName;
-      pct = Math.min(pct + 15, 95);
-      document.getElementById('progress-fill').style.width = pct+'%';
-      document.getElementById('progress-stage').textContent = displayName;
-      document.getElementById('progress-pct').textContent = pct+'%';
-      log.innerHTML += `<div class="i">[${displayName}] Processing...</div>\n`;
-      log.scrollTop = log.scrollHeight;
-    }
-
-    if (job.status === 'completed') {
-      clearInterval(poll);
-      document.getElementById('progress-fill').style.width = '100%';
-      document.getElementById('progress-stage').textContent = 'Complete!';
-      document.getElementById('progress-pct').textContent = '100%';
-      log.innerHTML += `<div class="ok">DONE: ${job.word_count} words, ${job.segment_count} segments</div>\n`;
-      log.scrollTop = log.scrollHeight;
-      showOutput(job.output_files || []);
-      running = false;
-      document.getElementById('run-btn').disabled = false;
-    } else if (job.status === 'failed') {
-      clearInterval(poll);
-      log.innerHTML += `<div class="e">FAILED: ${job.error||'Unknown error'}</div>\n`;
-      log.scrollTop = log.scrollHeight;
-      running = false;
-      document.getElementById('run-btn').disabled = false;
-    }
-  }, 2000);
+  appendLog(`Job started: ${result.job_id}`);
+  startWatchingJob(result.job_id);
 }
 
 function cancelPipeline() {
-  if (!running) return;
-  fetch(API+'/run/cancel', {method:'POST'});
-  document.getElementById('log').innerHTML += '<div class="w">Cancelled by user.</div>\n';
-  running = false;
-  document.getElementById('run-btn').disabled = false;
+  if (!running || !currentJobId) return;
+  fetch(API+'/run/cancel', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({job_id: currentJobId})
+  });
+  document.getElementById('log').innerHTML += '<div class="w">Cancellation requested.</div>\n';
 }
 
 function showOutput(files) {

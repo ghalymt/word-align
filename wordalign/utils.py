@@ -1,7 +1,9 @@
 """Shared helpers: text normalization, timecode math, ffmpeg wrappers."""
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 from .config import NON_TERMINAL_ABBREVIATIONS, TERMINAL_PUNCT_PATTERN
 
@@ -89,7 +91,10 @@ def ms_to_time(ms: int) -> str:
 
 
 def get_audio_duration(input_path: str) -> float:
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+    ffprobe = os.environ.get("WORDALIGN_FFPROBE") or shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    cmd = [ffprobe, "-v", "error", "-show_entries", "format=duration",
            "-of", "default=noprint_wrappers=1:nokey=1", input_path]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE,
@@ -101,10 +106,22 @@ def get_audio_duration(input_path: str) -> float:
 
 def create_chunk_wav(input_path: str, start_time: float, duration: float,
                      output_path: str) -> None:
-    cmd = ["ffmpeg", "-ss", str(start_time), "-t", str(duration),
-           "-i", input_path,
-           "-ar", "16000", "-ac", "1", "-f", "wav",
-           "-loglevel", "error", "-y", output_path]
+    # Use an absolute path to ffmpeg when possible. The bare command
+    # "ffmpeg" would otherwise hit torchaudio's bundled shim (which
+    # is broken in a one-file PyInstaller build) before reaching the
+    # real binary on the host's PATH.
+    import shutil
+    ffmpeg = os.environ.get("WORDALIGN_FFMPEG") or shutil.which("ffmpeg")
+    if ffmpeg and os.path.isfile(ffmpeg):
+        cmd = [ffmpeg, "-ss", str(start_time), "-t", str(duration),
+               "-i", input_path,
+               "-ar", "16000", "-ac", "1", "-f", "wav",
+               "-loglevel", "error", "-y", output_path]
+    else:
+        cmd = ["ffmpeg", "-ss", str(start_time), "-t", str(duration),
+               "-i", input_path,
+               "-ar", "16000", "-ac", "1", "-f", "wav",
+               "-loglevel", "error", "-y", output_path]
     subprocess.run(cmd, check=True)
 
 
