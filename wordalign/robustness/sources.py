@@ -31,8 +31,11 @@ FMA_REPO = "benjamin-paine/free-music-archive-commercial-16khz-full"
 
 
 def _need(module: str):
+    import importlib
     try:
-        return __import__(module)
+        # import_module returns the submodule itself ("pyarrow.parquet"),
+        # where __import__ would return the top-level package.
+        return importlib.import_module(module)
     except ImportError as exc:
         raise RuntimeError(
             f"the benchmark needs '{module}' (pip install wordalign[bench])") from exc

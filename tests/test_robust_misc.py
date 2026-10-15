@@ -195,6 +195,15 @@ class TestBenchmark(unittest.TestCase):
             self.assertIn("| v2.2 | free | 0.0%", md)
 
 
+class TestSources(unittest.TestCase):
+
+    def test_need_returns_the_submodule(self):
+        from wordalign.robustness.sources import _need
+        self.assertEqual(_need("os.path").__name__, os.path.__name__)
+        with self.assertRaises(RuntimeError):
+            _need("no_such_module_here")
+
+
 class TestFetchModels(unittest.TestCase):
 
     def test_list_without_network(self):
