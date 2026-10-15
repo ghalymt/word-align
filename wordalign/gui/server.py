@@ -277,6 +277,47 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, path: Path, content_type: str) -> None:
+        """Send a file, honouring a single ``Range: bytes=a-b`` request so
+        the browser's audio element can seek."""
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        status = 200
+        m = re.match(r"^bytes=(\d*)-(\d*)$", self.headers.get("Range", "").strip())
+        if m and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            else:                                   # last N bytes
+                start = max(0, size - int(m.group(2)))
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status = 206
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(1 << 16, remaining))
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                remaining -= len(chunk)
+
     def _send_json(self, data: Any, status: int = 200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
@@ -510,6 +551,24 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 store.close()
                 self._send_json({"jobs": []})
 
+        elif re.match(r"^/api/job/[^/]+/review$", path):
+            from .review import job_output_dir, load_review
+            folder = job_output_dir(path.split("/")[3])
+            data = load_review(folder) if folder is not None else None
+            if data is None:
+                self._send_json({"error": "This job has no review queue"}, 404)
+            else:
+                self._send_json(data)
+
+        elif re.match(r"^/api/job/[^/]+/audio$", path):
+            from .review import AUDIO_TYPES, find_review_audio, job_output_dir
+            folder = job_output_dir(path.split("/")[3])
+            audio = find_review_audio(folder) if folder is not None else None
+            if audio is None:
+                self._send_json({"error": "No review audio for this job"}, 404)
+            else:
+                self._send_file(audio, AUDIO_TYPES.get(audio.suffix, "application/octet-stream"))
+
         elif path.startswith("/api/job/"):
             job_id = path.split("/")[-1]
             from ..core.database import ProjectStore
@@ -565,6 +624,22 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
         if path == "/api/run":
             result = self._start_pipeline(body)
             self._send_json(result, 500 if result.get("error") else 200)
+
+        elif re.match(r"^/api/job/[^/]+/review$", path):
+            from .review import job_output_dir, save_edits
+            folder = job_output_dir(path.split("/")[3])
+            if folder is None:
+                self._send_json({"error": "Job not found"}, 404)
+                return
+            try:
+                saved = save_edits(folder, body.get("edits"))
+            except FileNotFoundError as exc:
+                self._send_json({"error": str(exc)}, 404)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 400)
+                return
+            self._send_json({"ok": True, **saved})
 
         elif path == "/api/glossary/add":
             from ..core.database import ProjectStore
@@ -722,7 +797,9 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                             if f in ("srt", "vtt", "ass")) or ("srt",)
             if "formats" in params:
                 profile_overrides["formats"] = formats
-            output_dir = Path.home() / "WordAlign" / "outputs" / job_id
+            from .review import job_output_dir
+            output_dir = job_output_dir(job_id) or (
+                Path.home() / "WordAlign" / "outputs" / job_id)
             cfg = PipelineConfig(
                 audio_path=audio_path,
                 transcript_path=transcript_path,
@@ -776,6 +853,13 @@ class PipelineAPIHandler(BaseHTTPRequestHandler):
                 output_files = []
             if status == "completed" and not output_files:
                 status = "failed"
+            if status == "completed" and getattr(result, "review_json_path", None):
+                # GUI uploads are deleted after the run; keep a small copy of
+                # the audio so the review queue can play each cue.
+                from .review import make_review_audio
+                if make_review_audio(audio_path, output_dir) is None:
+                    result.warnings.append("Review audio could not be made "
+                                           "(ffmpeg); the review queue will be silent.")
             if store is not None:
                 store.update_job(
                     job_id, status=status, completed_at=time.time(),

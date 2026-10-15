@@ -38,6 +38,9 @@ Segment = Tuple[float, float]
 MUSIC_THRESHOLD = 0.35
 CROWD_THRESHOLD = 0.35
 NOISE_THRESHOLD = 0.45
+# The sound-event model tags faint room tone as "background noise" even in
+# studio recordings; only report it when the SNR agrees.
+NOISE_MAX_SNR_DB = 25.0
 LOW_SNR_DB = 10.0
 VERY_LOW_SNR_DB = 3.0
 CLIPPING_THRESHOLD = 0.001
@@ -71,7 +74,9 @@ class ChunkInfo:
                 out.append("very_low_snr")
             elif self.snr_db < LOW_SNR_DB:
                 out.append("low_snr")
-        if self.noise is not None and self.noise >= NOISE_THRESHOLD:
+        snr_known = self.snr_db is not None and self.snr_db == self.snr_db
+        if (self.noise is not None and self.noise >= NOISE_THRESHOLD
+                and (not snr_known or self.snr_db < NOISE_MAX_SNR_DB)):
             out.append("noise")
         if self.narrowband:
             out.append("narrowband")

@@ -555,11 +555,21 @@ class PipelineRunner(RobustStagesMixin):
             else:
                 if cfg.srt_path and self._stage_enabled("rough_srt"):
                     timed_sources["SRT"] = self._rough_srt_words()
+                engine_sources = [k for k in timed_sources if k != "SRT"]
                 if (cfg.use_vosk and "Vosk" not in timed_sources
                         and self._stage_enabled("vosk")):
-                    vosk_words = self._run_vosk(language)
-                    if vosk_words:
-                        timed_sources["Vosk"] = vosk_words
+                    if len(engine_sources) >= 2 and cfg.forced_align:
+                        # Two timed voters already give strong anchors and the
+                        # forced aligner does the rest; Vosk would only add
+                        # CPU time (its large English model is slow to load).
+                        self._emit(StageMessage(
+                            stage="vosk",
+                            message=f"Vosk skipped: {len(engine_sources)} timed voters "
+                                    f"({', '.join(engine_sources)}) already anchor the timing."))
+                    else:
+                        vosk_words = self._run_vosk(language)
+                        if vosk_words:
+                            timed_sources["Vosk"] = vosk_words
             self._timing_stats = self._timing_anchor(language, aligned_words,
                                                      timed_sources)
             print_alignment_statistics(aligned_words)

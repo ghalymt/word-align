@@ -162,6 +162,11 @@ class TestQualityMap(unittest.TestCase):
         self.assertIn("overlap", q.conditions_at(44.0, 50.0))
         self.assertEqual(q.conditions_at(1.0, 5.0), [])
 
+    def test_sed_noise_needs_a_low_snr(self):
+        self.assertEqual(ChunkInfo(0, 10, snr_db=60.0, noise=0.9).conditions, [])
+        self.assertEqual(ChunkInfo(0, 10, snr_db=15.0, noise=0.9).conditions, ["noise"])
+        self.assertEqual(ChunkInfo(0, 10, noise=0.9).conditions, ["noise"])
+
     def test_cache_round_trip(self):
         q = self._map()
         q.sed_groups = {"music": np.linspace(0, 1, 1500).astype(np.float16)}

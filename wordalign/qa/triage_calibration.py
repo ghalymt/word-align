@@ -56,7 +56,12 @@ def label_cues(cues: Sequence[Dict], corrected: Sequence[Dict]) -> List[int]:
         if best is None:
             labels.append(1)            # the cue was deleted or moved away
             continue
-        changed = _norm(c.get("text", "")) != _norm(best["text"])
+        text = best["text"]
+        speaker = c.get("speaker")
+        if speaker and " ".join(text.split()).startswith(f"{speaker}:"):
+            # The sentence-level SRT names the speaker; the review cue does not.
+            text = " ".join(text.split())[len(speaker) + 1:]
+        changed = _norm(c.get("text", "")) != _norm(text)
         moved = (abs(best["start"] - s0) > MOVE_TOLERANCE_S
                  or abs(best["end"] - s1) > MOVE_TOLERANCE_S)
         labels.append(1 if (changed or moved) else 0)
