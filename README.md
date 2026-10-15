@@ -184,7 +184,7 @@ wordalign --vosk-models "D:\Subtitle edit\Vosk" --engines vosk -l en video.mp4
 - **Reference mode** (`-t transcript`) — your transcript's words are kept exactly; the engines only supply timings. Where engines agree they set **anchors**, and Qwen3-ForcedAligner (or wav2vec2) times the words between anchors on the original audio; MFA and pause-aware interpolation fill the rest, and interpolated words are flagged for review. `--timing fill_only` uses the 2.1 waterfall (Vosk → rough SRT → Qwen → WhisperX → MFA → interpolation) instead. An `.srt` transcript keeps its own cue boundaries (`[tags]` are skipped).
 - **Ensemble mode** (no transcript) — the best available engine (WhisperX, else Qwen, else Vosk) produces the transcript; with `--voters` (or the robust profile) several engines transcribe the same VAD chunks and **vote** word by word. Timing then works as in reference mode. `--legacy-ensemble` switches to the older consensus vote across all engines.
 
-Every run also writes `<name>_review.json`: each cue is *Accept*, *Quick check* or *Redo*, with the reason (`--no-triage` turns it off).
+Every run with anchor timing (the default) also writes `<name>_review.json`: each cue is *Accept*, *Quick check* or *Redo*, with the reason (`--no-triage` turns it off).
 
 ### Batch mode
 

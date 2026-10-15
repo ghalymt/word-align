@@ -19,6 +19,7 @@ deleted after the run.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -28,6 +29,7 @@ from typing import Dict, List, Optional
 
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_TEXT_CHARS = 2000
+MAX_TIME_S = 48 * 3600.0
 REVIEW_AUDIO_NAMES = ("review_audio.webm", "review_audio.m4a", "review_audio.wav")
 AUDIO_TYPES = {".webm": "audio/webm", ".m4a": "audio/mp4", ".wav": "audio/wav"}
 
@@ -62,8 +64,13 @@ def find_review_audio(folder: Path) -> Optional[Path]:
     return None
 
 
-def make_review_audio(src: str, folder: Path, ffmpeg: str = "ffmpeg") -> Optional[Path]:
+def make_review_audio(src: str, folder: Path, ffmpeg: Optional[str] = None) -> Optional[Path]:
     """Write a small, seekable mono copy of *src* for review playback."""
+    if ffmpeg is None:
+        from ..audio.io import ffmpeg_binary
+        ffmpeg = ffmpeg_binary()
+    if not ffmpeg:
+        return None
     folder.mkdir(parents=True, exist_ok=True)
     attempts = [
         ("review_audio.webm", ["-c:a", "libopus", "-b:a", "32k"]),
@@ -134,9 +141,10 @@ def _clean_edit(raw, cue: Dict) -> Optional[Dict]:
                 continue
             try:
                 val = round(float(val), 3)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return None
-            if val < 0:
+            # NaN/inf pass a "< 0" test and break the SRT writer later.
+            if not math.isfinite(val) or val < 0 or val > MAX_TIME_S:
                 return None
             out[key] = val
         start = out.get("start", cue["start"])

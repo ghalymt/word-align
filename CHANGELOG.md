@@ -16,15 +16,17 @@ see [docs/robust_flow.md](docs/robust_flow.md).
   (or wav2vec2) aligns the windows between them on the original audio, MFA
   and pause-aware interpolation fill the rest. `--timing fill_only` brings
   back the 2.1 waterfall; `--no-forced-align` keeps the engine times.
-- **Every run writes `<name>_review.json`** (cue tiers Accept / Quick check /
-  Redo with reasons) unless `--no-triage` is given.
+- **Every run with anchor timing (the default) writes `<name>_review.json`**
+  (cue tiers Accept / Quick check / Redo with reasons) unless `--no-triage`
+  is given.
 - **The audio analysis stage runs by default** when its model is present
   (Silero VAD; `--no-vad` turns it off), and the hallucination filter drops
   engine words the audio does not support (`--no-hallucination-filter`).
 - **Speaker labels use pyannote Community-1** (falls back to 3.1); accept
   its terms on Hugging Face once.
-- **Transcript-free mode skips Vosk** when two timed voters and the forced
-  aligner are available.
+- **Transcript-free mode skips Vosk** when two timed voters already anchor
+  the timing and a forced aligner (Qwen3-ForcedAligner or wav2vec2) is
+  installed.
 - The Qwen3-ForcedAligner language list in the model catalog was wrong
   (it listed Arabic); it now matches the model: zh, en, yue, fr, de, it, ja,
   ko, pt, ru, es.

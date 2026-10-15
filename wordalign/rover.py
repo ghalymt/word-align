@@ -20,8 +20,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from .utils import normalize_word
 
 # Vote weights. Set from published robustness results (FFASR far-field,
-# Appen private accents, the Open ASR Leaderboard) and meant to be re-fitted
-# on your own corrected jobs (``wordalign-bench fit-priors``).
+# Appen private accents, the Open ASR Leaderboard). Override them per
+# profile with ``"robust": {"voter_priors": {"whisperx": 0.9}}``.
 DEFAULT_PRIORS: Dict[str, float] = {
     "cohere": 1.00,     # most robust on far-field noise (FFASR #1)
     "qwen": 0.95,       # most robust on accents (Appen private track #1)

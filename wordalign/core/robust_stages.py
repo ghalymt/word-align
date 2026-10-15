@@ -113,7 +113,9 @@ class RobustStagesMixin:
         t0 = time.time()
         try:
             audio = load_audio(cfg.audio_path)
-        except AudioDecodeError as exc:
+        except (AudioDecodeError, OSError, ValueError, MemoryError) as exc:
+            # The analysis is optional: a file it cannot decode (or decode
+            # whole) leaves the run to the engines, as in 2.1.
             self._msg("analysis", f"Audio analysis skipped: {exc}", "warn")
             self._emit(StageCompleted(stage="analysis", duration_seconds=time.time() - t0))
             return None
@@ -206,6 +208,14 @@ class RobustStagesMixin:
 
     # -- stage 2: cleanup ------------------------------------------------------------
     def _cleanup_stage(self) -> str:
+        try:
+            return self._cleanup_stage_run()
+        finally:
+            # The decoded file (about 230 MB per hour) is not needed after
+            # this stage; do not hold it for the rest of the run.
+            self._analysis_audio = None
+
+    def _cleanup_stage_run(self) -> str:
         cfg = self.config
         self._asr_audio = cfg.audio_path
         self._cleanup_signature = "none"
@@ -245,6 +255,30 @@ class RobustStagesMixin:
         return self._asr_audio
 
     # -- engine runs on chunks -----------------------------------------------------
+    def _cached_complete(self, plugin: str, model, language: str, settings: Dict,
+                         compute, complete):
+        """``_cached_engine`` that only caches a *complete* result.
+
+        A result with failed pieces (a busy GPU running out of memory, say)
+        is used for this run but not cached, so the next run retries those
+        pieces instead of replaying the gap forever.
+        """
+        held: Dict = {}
+
+        def load():
+            out = compute()
+            if out and not complete(out):
+                held["out"] = out
+                return {}
+            return out
+
+        out, hit = self._cached_engine(plugin, model, language, settings, load)
+        if not out and "out" in held:
+            self._msg(plugin, "Some pieces failed; this result is not cached, so the "
+                              "next run retries them.", "warn")
+            return held["out"], False
+        return out, hit
+
     def _chunk_settings(self, chunks: Optional[Sequence[Chunk]]) -> Dict:
         key = json.dumps([[round(s, 2), round(e, 2)] for s, e in chunks]) if chunks else ""
         return {"chunks": hashlib.sha256(key.encode()).hexdigest()[:12],
@@ -267,8 +301,13 @@ class RobustStagesMixin:
                            chunks=chunks, return_payload=True)
             return _as_qwen_payload(out)
 
-        payload, hit = self._cached_engine("qwen", cfg.qwen_models_dir, language,
-                                           settings, load)
+        def complete(p) -> bool:
+            p = _as_qwen_payload(p)
+            return not p.get("failed") and all(
+                c.get("status", "ok") == "ok" for c in (p.get("chunks") or []))
+
+        payload, hit = self._cached_complete("qwen", cfg.qwen_models_dir, language,
+                                             settings, load, complete)
         payload = _as_qwen_payload(payload)
         if hit:
             self._msg("qwen", "Loaded Qwen output from cache.")
@@ -296,8 +335,9 @@ class RobustStagesMixin:
                                           log=lambda m: self._msg("parakeet", m, "warn"))
             return {"chunks": {str(k): v for k, v in out.items()}} if out is not None else {}
 
-        payload, hit = self._cached_engine(name, name, language,
-                                           self._chunk_settings(chunks), run)
+        payload, hit = self._cached_complete(
+            name, name, language, self._chunk_settings(chunks), run,
+            lambda p: len(p.get("chunks", {})) >= len(chunks))
         if hit:
             self._msg(name, f"Loaded {name} output from cache.")
         if not payload:
@@ -308,7 +348,19 @@ class RobustStagesMixin:
     def _voter_list(self) -> List[str]:
         cfg = self.config
         if cfg.voters:
-            return [v for v in cfg.voters if v in VOTER_SOURCE_NAMES]
+            # An engine switched off (--no-whisperx, --engines, a GUI
+            # checkbox) stays off even when the profile lists it as a voter.
+            enabled = {"whisperx": cfg.use_whisperx, "qwen": cfg.use_qwen,
+                       "vosk": cfg.use_vosk}
+            out = []
+            for v in cfg.voters:
+                if v not in VOTER_SOURCE_NAMES:
+                    continue
+                if not enabled.get(v, True):
+                    self._msg("voting", f"{v} left out of the vote: it is switched off")
+                    continue
+                out.append(v)
+            return out
         out = []
         if cfg.use_whisperx:
             out.append("whisperx")
@@ -481,7 +533,8 @@ class RobustStagesMixin:
             for k in range(block.size):
                 src = voted[block.b + k]
                 dst = aligned_words[block.a + k]
-                for key in ("text_conf", "voters", "alternatives", "speaker", "chunk"):
+                for key in ("text_conf", "voters", "alternatives", "speaker", "chunk",
+                            "overlap_added"):
                     if key in src:
                         dst[key] = src[key]
 
@@ -518,7 +571,7 @@ class RobustStagesMixin:
         self._emit(StageCompleted(stage="sedicow", duration_seconds=time.time() - t0))
         if not result:
             return voted
-        merged, added = merge_overlap_words(voted, result, q.overlaps)
+        merged, added = merge_overlap_words(voted, result, q.overlaps, turns=turns)
         if added:
             timed_sources.setdefault("SE-DiCoW", []).extend(
                 w for w in merged if w.get("overlap_added"))
@@ -590,9 +643,10 @@ class RobustStagesMixin:
         cfg = self.config
         if not cfg.forced_align:
             return None, ""
-        from ..engines.qwen_engine import ALIGNER_LANGUAGES, qwen_align
+        from ..engines.qwen_engine import ALIGNER_LANGUAGES, _resolve_python, qwen_align
         lang = (language or "en").split("-")[0].lower()
-        if cfg.use_qwen and lang in ALIGNER_LANGUAGES:
+        # Qwen only when its venv is really there; otherwise wav2vec2 below.
+        if cfg.use_qwen and lang in ALIGNER_LANGUAGES and _resolve_python(cfg.qwen_python):
             def align(jobs):
                 with self._gpu_slot("qwen"):
                     return qwen_align(audio_path, jobs, lang, qwen_python=cfg.qwen_python,
@@ -609,6 +663,9 @@ class RobustStagesMixin:
                                           cancel_event=self.ctx.cancel_event)
             return align, "wav2vec2"
         return None, ""
+
+    def _aligner_available(self, language: str) -> bool:
+        return self._forced_aligner(language, self.config.audio_path)[0] is not None
 
     def _timing_anchor(self, language: str, aligned_words: List[Dict],
                        sources: Dict[str, List[Dict]]) -> Dict:

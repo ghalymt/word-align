@@ -130,7 +130,7 @@ default outside the robust profile) skips the stage.
 Without a transcript, every voter transcribes the same VAD chunks of
 `asr_audio`, and ROVER builds a word network and votes per chunk, weighting
 each engine by a prior (Cohere 1.0, Qwen 0.95, SE-DiCoW 0.9, parakeet 0.85,
-WhisperX 0.8, Vosk 0.4; change them in a profile's `voter_priors`). An
+WhisperX 0.8, Vosk 0.4; change them in a profile with `"robust": {"voter_priors": {"whisperx": 0.9}}`). An
 engine that returns nothing for a chunk votes for silence, which is how
 invented "Thank you." lines disappear. Each word keeps its agreement
 (`text_conf`) and the losing readings (`alternatives`), which the review

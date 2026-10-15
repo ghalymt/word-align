@@ -132,11 +132,16 @@ if ($Components -contains "vad") {
     Fetch-Models $hubPy @("vad")
 }
 
+# sed, diarize and sedicow run in the whisperx venv. Without it they are
+# skipped (with a note at the end) and the other components still install.
+$skipped = @()
 foreach ($c in @("sed", "diarize", "sedicow")) {
     if ($Components -contains $c -and -not (Test-Path -LiteralPath $whisperxPy)) {
-        throw "Component '$c' runs in the whisperx venv; build it first with scripts\build_backends.ps1"
+        Write-Warning "Skipping '$c': it runs in the whisperx venv, which is not in $VenvRoot (build it with scripts\build_backends.ps1)."
+        $skipped += $c
     }
 }
+$Components = @($Components | Where-Object { $skipped -notcontains $_ })
 
 if ($Components -contains "sed") {
     Write-Section "Sound-event detection (PretrainedSED BEATs, whisperx venv)"
@@ -160,9 +165,12 @@ if ($Components -contains "separate") {
     if (-not $SkipModels) {
         $sepDir = Join-Path $Models "separation"
         New-Item -ItemType Directory -Path $sepDir -Force | Out-Null
-        $code = "from audio_separator.separator import Separator; s = Separator(model_file_dir=r'$sepDir', output_dir=r'$sepDir'); " +
+        # The folder goes through the environment, so any character in the path is safe.
+        $env:WA_SEP_DIR = $sepDir
+        $code = "import os; from audio_separator.separator import Separator; d = os.environ['WA_SEP_DIR']; s = Separator(model_file_dir=d, output_dir=d); " +
                 "[s.load_model(model_filename=m) for m in ('model_bs_roformer_ep_317_sdr_12.9755.ckpt', 'mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt')]; print('separation models ready')"
         Invoke-Checked $sepPy @("-c", $code) "separation model download"
+        Remove-Item Env:WA_SEP_DIR -ErrorAction SilentlyContinue
     }
 }
 
@@ -190,4 +198,7 @@ if ($Components -contains "parakeet") {
 Write-Section "Done"
 Write-Host "Venvs : $VenvRoot"
 Write-Host "Models: $Models"
+if ($skipped.Count -gt 0) {
+    Write-Warning "Not installed (need the whisperx venv): $($skipped -join ', ')"
+}
 Write-Host "Check what word-align can use with:  wordalign --doctor"

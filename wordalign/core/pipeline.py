@@ -37,6 +37,7 @@ from ..utils import (detect_language, extract_tags_from_transcript,
                      time_to_ms)
 from .config import JobContext, PipelineProfile, SegmentationConfig
 from .converters import dict_segment_to_typed, dicts_to_words
+from ..engines._worker import WorkerCancelled
 from .errors import PipelineCancelled
 from .events import (CancelledEvent, ErrorEvent, PipelineCompleted,
                      PipelineEvent, PipelineStarted, StageCompleted,
@@ -156,6 +157,8 @@ class PipelineRunner(RobustStagesMixin):
                 setattr(cfg, name, value)
         if rb.voters is not None:
             cfg.voters = tuple(rb.voters)
+        if rb.voter_priors:
+            cfg.voter_priors = {str(k): float(v) for k, v in dict(rb.voter_priors).items()}
         if rb.diarize is not None:
             cfg.diarize = bool(rb.diarize) or cfg.diarize
         if self.profile.timing.strategy in ("anchor", "fill_only"):
@@ -300,6 +303,13 @@ class PipelineRunner(RobustStagesMixin):
             finally:
                 self._cleanup_workdir()
         except PipelineCancelled:
+            self.cancelled = True
+            self._emit(CancelledEvent(stage=self._cancel_stage))
+            return PipelineResult(cancelled=True)
+        except (WorkerCancelled, InterruptedError):
+            # A backend worker noticed the cancel first; same outcome.
+            if not (self.ctx.cancel_requested or self.ctx.cancel_event.is_set()):
+                raise
             self.cancelled = True
             self._emit(CancelledEvent(stage=self._cancel_stage))
             return PipelineResult(cancelled=True)
@@ -558,7 +568,7 @@ class PipelineRunner(RobustStagesMixin):
                 engine_sources = [k for k in timed_sources if k != "SRT"]
                 if (cfg.use_vosk and "Vosk" not in timed_sources
                         and self._stage_enabled("vosk")):
-                    if len(engine_sources) >= 2 and cfg.forced_align:
+                    if len(engine_sources) >= 2 and self._aligner_available(language):
                         # Two timed voters already give strong anchors and the
                         # forced aligner does the rest; Vosk would only add
                         # CPU time (its large English model is slow to load).

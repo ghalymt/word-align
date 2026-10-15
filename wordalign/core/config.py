@@ -72,6 +72,7 @@ class RobustConfig:
     hallucination_filter: Optional[bool] = None
     cleanup: Optional[str] = None
     voters: Optional[list] = None
+    voter_priors: Optional[dict] = None     # ROVER weights, e.g. {"whisperx": 0.9}
     overlap_map: Optional[bool] = None
     overlap_asr: Optional[bool] = None
     diarize: Optional[bool] = None

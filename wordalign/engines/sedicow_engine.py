@@ -102,14 +102,23 @@ def _provisional_times(words: List[Dict]) -> List[float]:
 
 
 def merge_overlap_words(voted: List[Dict], windows: Sequence[Dict],
-                        overlaps: Sequence[Tuple[float, float]]) -> Tuple[List[Dict], int]:
-    """Insert the non-dominant speakers' overlapped words; returns (words, added)."""
+                        overlaps: Sequence[Tuple[float, float]],
+                        turns: Optional[Sequence[Tuple[float, float, str]]] = None
+                        ) -> Tuple[List[Dict], int]:
+    """Insert the non-dominant speakers' overlapped words; returns (words, added).
+
+    *turns*: the file's diarization turns, so the inserted words get the
+    same "Speaker N" names as the rest of the file.
+    """
     from ..diarize import speaker_names
     if not windows:
         return voted, 0
     times = _provisional_times(voted)
-    all_turns = [(0.0, 0.0, sp["label"]) for w in windows for sp in w.get("speakers", [])]
-    names = speaker_names(all_turns)
+    if turns:
+        names = speaker_names(turns)
+    else:
+        names = speaker_names([(0.0, 0.0, sp["label"]) for w in windows
+                               for sp in w.get("speakers", [])])
     inserts: List[Dict] = []
     for win in windows:
         s, e = float(win["start"]), float(win["end"])

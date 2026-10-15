@@ -205,6 +205,11 @@ def assign_speakers(words: List[Dict], turns: Sequence[Turn]) -> int:
     names = speaker_names(turns)
     labelled = 0
     for word in words:
+        if word.get("overlap_added") and word.get("speaker"):
+            # Transcribed for the *other* speaker in an overlap (SE-DiCoW);
+            # the turn overlapping it most is usually the dominant speaker.
+            labelled += 1
+            continue
         start, end = word.get("start"), word.get("end")
         if start is None or end is None:
             continue
