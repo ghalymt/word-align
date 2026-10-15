@@ -65,11 +65,43 @@ see [docs/robust_flow.md](docs/robust_flow.md).
   `WORDALIGN_VAD_MODEL`, `WORDALIGN_SED_DIR`.
 - The model catalog lists the new models with their licenses.
 
+### Measured (`wordalign-bench`, quick suite, RTX 4070 Ti)
+
+Five minutes of LibriSpeech speech in nine conditions (clean, noise 5 dB,
+music 0 dB, six-talker babble 0 dB, reverb 1.0 s, μ-law phone, a second
+talker at −5 dB, music only, noise only), every run with an empty cache.
+"2.1" is the 2.1 behaviour run by the 2.2 code
+(`--timing fill_only --no-vad --no-hallucination-filter --no-triage`).
+
+| | 2.1 | 2.2 defaults | `--profile robust` |
+|---|---|---|---|
+| Word-start error, known transcript (mean) | 868 ms | **69 ms** | 70 ms |
+| Words within 100 ms, known transcript | 83.0% | **90.1%** | 90.1% |
+| WER, no transcript | 16.9% | **15.0%** | 15.3% |
+| Word-start error, no transcript (mean) | 225 ms | **73 ms** | 106 ms |
+| Invented words per 10 min of music/noise only | 300 | **0** | **0** |
+| Erroneous cues the review queue flags (no transcript) | – | 88% | 77% |
+| Run time for the 5-minute file | 238–289 s | 234–282 s | 195–268 s |
+
+By condition: reverb WER 43% → 2.6%; babble timing with a known transcript
+5.8 s → 0.2 s. Worse than 2.1: transcript-free WER under 0 dB music with
+sung vocals (0% → 12–13%: the voters also transcribe the lyrics) and under
+0 dB babble (73% → 84–87%, unusable either way). On this synthetic suite the
+robust profile's extra voters and cleanup did not beat the 2.2 defaults;
+whether they help on real recordings with music beds, crowds and crosstalk
+is not measured yet, so compare on your own material (see
+docs/benchmark.md).
+
 ### Fixed
 
 - Qwen chunks that ran out of GPU memory are split and retried; pieces that
   still fail are reported instead of being silently empty.
 - WhisperX finds its venv through the same lookup as the other backends.
+- `--doctor` starts MFA instead of only finding it, so a pip install of MFA
+  without its native `kalpy` module is reported (install MFA from
+  conda-forge).
+- A forced-aligned word no longer vanishes from the word-level SRT when the
+  aligner gives it no length.
 
 ## 2.1.0 — 2026-10-01
 

@@ -98,5 +98,43 @@ wordalign-bench fit-triage --jobs FOLDER [--dry-run]
 
 ## Results
 
-See the release notes of each version for the numbers measured on the
-release candidate.
+### 2.2.0 (quick suite, RTX 4070 Ti, empty cache per run)
+
+| | 2.1 | 2.2 defaults | robust |
+|---|---|---|---|
+| Word-start error, reference mode | 868 ms | 69 ms | 70 ms |
+| Within 100 ms, reference mode | 83.0% | 90.1% | 90.1% |
+| WER, free mode | 16.9% | 15.0% | 15.3% |
+| Word-start error, free mode | 225 ms | 73 ms | 106 ms |
+| Invented words / 10 min | 300 | 0 | 0 |
+| Triage recall / Accept cues with errors, free mode | – | 88% / 5% | 77% / 9% |
+| Triage recall / Accept cues with errors, reference mode | – | 50% / 24% | 63% / 25% |
+
+| WER by condition (free mode) | 2.1 | 2.2 | robust |
+|---|---|---|---|
+| clean | 3.7% | 2.4% | 2.4% |
+| noise 5 dB | 0.0% | 0.0% | 0.0% |
+| music 0 dB (sung vocals) | 0.0% | 13.3% | 12.0% |
+| babble 0 dB | 72.6% | 84.2% | 87.4% |
+| reverb 1.0 s | 43.4% | 2.6% | 2.6% |
+| phone (μ-law) | 3.8% | 1.3% | 1.3% |
+| second talker −5 dB | 1.0% | 1.0% | 1.0% |
+
+| Word-start error by condition (reference mode) | 2.1 | 2.2 | robust |
+|---|---|---|---|
+| clean | 47 ms | 36 ms | 36 ms |
+| noise 5 dB | 28 ms | 32 ms | 32 ms |
+| music 0 dB | 182 ms | 85 ms | 85 ms |
+| babble 0 dB | 5761 ms | 205 ms | 205 ms |
+| reverb 1.0 s | 44 ms | 39 ms | 39 ms |
+| phone (μ-law) | 27 ms | 25 ms | 25 ms |
+| second talker −5 dB | 46 ms | 62 ms | 62 ms |
+
+What this says: anchors + forced alignment fix the large timing failures
+(babble, music, reverb), the VAD/voting stages stop invented text on
+non-speech, and the review queue catches most erroneous cues when there is
+no transcript. Under loud music with sung vocals the voters transcribe the
+lyrics too, and with a reference transcript the review queue still misses
+about half of the cues whose timing is off by more than 250 ms. On this
+synthetic suite the robust profile's extra voters and cleanup did not beat
+the defaults; run the benchmark on recordings like yours before choosing.

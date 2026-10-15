@@ -253,11 +253,21 @@ sound-event model and forced alignment.
 
 ## What it costs
 
-On an RTX 4070 Ti (12 GB), a 45 s English clip ran in about 3½ minutes
-with the robust profile, most of it loading four ASR models once each. The
-per-engine time grows roughly linearly with the audio after that; cleanup
-only runs on the chunks that need it. GPU engines run one at a time
+On an RTX 4070 Ti (12 GB) the robust profile took about 3 minutes for a
+45 s clip (mostly loading the models once each) and 195–270 s for the
+5-minute benchmark file, about the same as 2.1 on that file. Cleanup only
+runs on the chunks that need it, and Vosk is skipped when two voters and an
+aligner already anchor the timing. GPU engines run one at a time
 (`WORDALIGN_GPU_SLOTS`), so 12 GB is enough for every model in the list.
+
+## Robust profile or defaults?
+
+On the benchmark's synthetic suite the 2.2 defaults (analysis, WhisperX +
+Qwen + Vosk voting, anchors + forced alignment, review queue) scored as well
+as the robust profile, which adds Cohere and parakeet, cleanup and the
+overlap map. The defaults are a good start; try `--profile robust` on
+recordings with music beds, crowds or crosstalk and compare, ideally with
+`wordalign-bench` on a few of your own files ([benchmark.md](benchmark.md)).
 
 ## Troubleshooting
 
