@@ -63,5 +63,19 @@ class TestReleaseNotes(unittest.TestCase):
         self.assertTrue(out.getvalue().strip())
 
 
+class TestNonAsciiOnWindowsConsole(unittest.TestCase):
+    """The release runner's stdout is cp1252; the notes must still print."""
+
+    def test_cp1252_stdout(self):
+        import os
+        import subprocess
+        env = dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONUTF8="0")
+        out = subprocess.run([sys.executable, str(ROOT / "scripts" / "release_notes.py"),
+                              __version__], capture_output=True, env=env, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr.decode("utf-8", "replace"))
+        text = out.stdout.decode("utf-8")
+        self.assertIn("μ-law", text)
+
+
 if __name__ == "__main__":
     unittest.main()
