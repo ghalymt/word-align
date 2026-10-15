@@ -612,7 +612,8 @@ class RobustStagesMixin:
 
     def _timing_anchor(self, language: str, aligned_words: List[Dict],
                        sources: Dict[str, List[Dict]]) -> Dict:
-        from ..timing import enforce_order, interpolate, run_anchor_alignment
+        from ..timing import (enforce_order, interpolate, repair_degenerate,
+                              run_anchor_alignment)
         from ..utils import get_audio_duration
         cfg = self.config
         self._emit(StageStarted(stage="timing",
@@ -673,10 +674,15 @@ class RobustStagesMixin:
         n_interp = interpolate(aligned_words, duration or None,
                                speech=q.speech if q is not None and q.has_vad else None)
         fixed = enforce_order(aligned_words)
+        squeezed = repair_degenerate(aligned_words, duration or None)
+        if squeezed:
+            fixed += enforce_order(aligned_words)
         stats["interpolated"] = n_interp
         stats["reordered"] = fixed
+        stats["squeezed"] = squeezed
         self._msg("interpolation", f"{n_interp} word(s) interpolated (flagged for review)"
-                  + (f"; {fixed} overlapping word time(s) corrected" if fixed else ""))
+                  + (f"; {fixed} overlapping word time(s) corrected" if fixed else "")
+                  + (f"; {squeezed} zero-length word(s) given room" if squeezed else ""))
         self._emit(StageCompleted(stage="interpolation", duration_seconds=time.time() - t2))
         return stats
 

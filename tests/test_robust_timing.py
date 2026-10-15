@@ -114,6 +114,56 @@ class TestFallbacks(unittest.TestCase):
         self.assertLess(words[1]["timing_conf"], 0.9)
 
 
+class TestAlignerChecks(unittest.TestCase):
+
+    def _setup(self, fa_shift):
+        from wordalign.timing import assign_times
+        words = [{"word": w} for w in TEXT.split()]
+        kn = known(TEXT)
+        qwen = match_source(kn, timed(TEXT), "Qwen3-ASR")
+        park = match_source(kn, timed(TEXT, shift=0.05), "parakeet-ultra")
+        anchors = build_anchors(len(words), [qwen, park])
+        aligned = {i: ((sp[0] + fa_shift, sp[1] + fa_shift), "Qwen3-FA")
+                   for i, sp in qwen.runs.items()}
+        assign_times(words, [qwen, park], anchors, aligned)
+        return words
+
+    def test_far_aligner_loses_to_two_engines(self):
+        words = self._setup(fa_shift=-2.0)
+        self.assertNotEqual(words[3]["source"], "Qwen3-FA")
+        self.assertAlmostEqual(words[3]["start"], timed(TEXT)[3]["start"], delta=0.06)
+
+    def test_qwen_asr_does_not_confirm_its_own_aligner(self):
+        from wordalign.timing import assign_times
+        words = [{"word": w} for w in TEXT.split()]
+        qwen = match_source(known(TEXT), timed(TEXT), "Qwen3-ASR")
+        anchors = build_anchors(len(words), [qwen])
+        aligned = {i: (sp, "Qwen3-FA") for i, sp in qwen.runs.items()}
+        assign_times(words, [qwen], anchors, aligned)
+        self.assertTrue(all(w["timing_conf"] < CONF_FA_CONFIRMED for w in words))
+        words = self._setup(fa_shift=0.02)            # parakeet is independent
+        self.assertTrue(all(w["timing_conf"] == CONF_FA_CONFIRMED for w in words))
+
+    def test_zero_length_words_get_room(self):
+        from wordalign.timing import repair_degenerate
+        words = [{"word": "firs", "start": 108.99, "end": 109.41},
+                 {"word": "did", "start": 109.57, "end": 109.57, "timing_conf": 0.95},
+                 {"word": "not", "start": 109.57, "end": 109.57, "timing_conf": 0.95},
+                 {"word": "think", "start": 109.81, "end": 110.05}]
+        self.assertEqual(repair_degenerate(words), 2)
+        for a, b in zip(words, words[1:]):
+            self.assertLessEqual(a["end"], b["start"] + 1e-6)
+        self.assertTrue(all(w["end"] - w["start"] >= 0.04 for w in words))
+        self.assertTrue(words[1]["squeezed"] and words[1]["timing_conf"] < 0.5)
+        # No room at all: still a minimum length, order kept by enforce_order.
+        tight = [{"word": "a", "start": 1.0, "end": 1.0}, {"word": "b", "start": 1.0, "end": 1.0},
+                 {"word": "c", "start": 1.0, "end": 1.2}]
+        repair_degenerate(tight)
+        enforce_order(tight)
+        self.assertTrue(all(w["end"] > w["start"] for w in tight))
+        self.assertTrue(all(a["end"] <= b["start"] + 1e-6 for a, b in zip(tight, tight[1:])))
+
+
 class TestChunkWindows(unittest.TestCase):
 
     def test_split_chunks_get_no_window(self):

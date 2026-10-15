@@ -52,6 +52,18 @@ CONF_RUN = 0.75
 CONF_MFA = 0.7
 CONF_SHORT = 0.5
 CONF_INTERPOLATED = 0.2
+CONF_SQUEEZED = 0.4          # aligner gave no room; spread over the space left
+FA_OVERRIDE_S = 0.5          # a strong anchor this far from the aligner wins
+
+# Timed sources whose word times come from the same model as an aligner:
+# their agreement with that aligner is not independent confirmation.
+_SAME_MODEL = {"Qwen3-FA": {"Qwen3-ASR"}, "wav2vec2": {"WhisperX"}}
+
+
+def _independent(source: str, aligner: str) -> bool:
+    base = aligner.replace(" (cleaned)", "")
+    return source not in _SAME_MODEL.get(base, set()) and \
+        not any(part in _SAME_MODEL.get(base, set()) for part in source.split("+"))
 
 Span = Tuple[float, float]
 
@@ -332,15 +344,20 @@ def assign_times(words: List[Dict], matches: Sequence[SourceMatches],
         chosen: Optional[Tuple[Span, str, float]] = None
         if i in aligned:
             span, aligner = aligned[i]
-            if src_spans:
-                close = any(abs(sp[0] - span[0]) <= STRONG_AGREE_S for _, sp in src_spans)
-                far = (anchor is not None and abs(anchor.span[0] - span[0]) > 0.5)
-                conf = CONF_FA_CONFIRMED if close else (CONF_FA_DISPUTED if far else CONF_FA)
+            indep = [(n, sp) for n, sp in src_spans if _independent(n, aligner)]
+            close = any(abs(sp[0] - span[0]) <= STRONG_AGREE_S for _, sp in indep)
+            far = anchor is not None and abs(anchor.span[0] - span[0]) > FA_OVERRIDE_S
+            if (far and not close and anchor.strong
+                    and sum(1 for n in anchor.sources if _independent(n, aligner)) >= 1):
+                # Two engines agree and the aligner is far off: the aligner
+                # was forced through text in the wrong order (or the wrong
+                # speaker). Keep the engines' time.
+                chosen = (anchor.span, "+".join(anchor.sources), CONF_FA_DISPUTED)
             else:
-                conf = CONF_FA
-            if not (MIN_WORD_S <= span[1] - span[0] <= MAX_WORD_S):
-                conf = min(conf, CONF_SHORT)
-            chosen = (span, aligner, conf)
+                conf = CONF_FA_CONFIRMED if close else (CONF_FA_DISPUTED if far else CONF_FA)
+                if not (MIN_WORD_S <= span[1] - span[0] <= MAX_WORD_S):
+                    conf = min(conf, CONF_SHORT)
+                chosen = (span, aligner, conf)
         elif anchor is not None:
             chosen = (anchor.span, "+".join(anchor.sources),
                       CONF_STRONG if anchor.strong else CONF_RUN)
@@ -377,6 +394,62 @@ def enforce_order(words: List[Dict], min_dur: float = 0.04) -> int:
             w["timing_conf"] = round(min(float(w.get("timing_conf", 0.5)), CONF_SHORT), 3)
             changed += 1
         prev_end = w["end"]
+    return changed
+
+
+def repair_degenerate(words: List[Dict], duration: Optional[float] = None,
+                      min_dur: float = 0.04) -> int:
+    """Give zero-length (or near-zero) words room.
+
+    A forced aligner that cannot place words, typically because the text
+    order does not match the audio, stacks them on one instant. Such words
+    vanish from a word-level SRT. Each cluster of them is spread, by
+    estimated word length, over the space between its timed neighbours,
+    staying as close as possible to where the aligner put them, and loses
+    timing confidence so the review queue shows it. Returns the number of
+    words changed.
+    """
+    timed = [i for i, w in enumerate(words)
+             if w.get("start") is not None and w.get("end") is not None]
+
+    def short(i: int) -> bool:
+        return float(words[i]["end"]) - float(words[i]["start"]) < min_dur - 1e-6
+
+    changed = 0
+    k = 0
+    while k < len(timed):
+        if not short(timed[k]):
+            k += 1
+            continue
+        m = k
+        while m < len(timed) and short(timed[m]):
+            m += 1
+        cluster = [words[timed[x]] for x in range(k, m)]
+        est = [max(min_dur, min(0.4, estimated_duration(str(w.get("word", "")))))
+               for w in cluster]
+        need = sum(est)
+        here = float(cluster[0]["start"])
+        lo = float(words[timed[k - 1]]["end"]) if k > 0 else max(0.0, here - need)
+        hi = float(words[timed[m]]["start"]) if m < len(timed) else \
+            (float(duration) if duration else here + need)
+        lo, hi = min(lo, here), max(hi, float(cluster[-1]["end"]))
+        if hi - lo >= need:
+            s0 = min(max(lo, here - need / 2), hi - need)
+            scale = 1.0
+        else:
+            s0 = lo
+            room = max(hi - lo, len(cluster) * min_dur)
+            scale = room / need
+        t = s0
+        for w, d in zip(cluster, est):
+            s, e = t, t + d * scale
+            w.update(start=round(s, 3), end=round(max(e, s + min_dur), 3),
+                     timing_conf=round(min(float(w.get("timing_conf", CONF_SQUEEZED)),
+                                           CONF_SQUEEZED), 3),
+                     squeezed=True)
+            t = e
+            changed += 1
+        k = m
     return changed
 
 
