@@ -85,6 +85,22 @@ class TestBackends(unittest.TestCase):
         with patch.dict(os.environ, {"WORDALIGN_MODELS_DIR": "/x/models"}):
             self.assertEqual(str(_project_models_root()).replace("\\", "/"), "/x/models")
 
+    def test_doctor_runs_mfa(self):
+        from wordalign.doctor import _mfa_status
+
+        class Done:
+            def __init__(self, rc, out="", err=""):
+                self.returncode, self.stdout, self.stderr = rc, out, err
+
+        with patch("subprocess.run", lambda *a, **k: Done(
+                1, err="Traceback\nModuleNotFoundError: No module named '_kalpy'\n")):
+            ok, detail = _mfa_status("/x/mfa")
+        self.assertFalse(ok)
+        self.assertIn("conda-forge", detail)
+        with patch("subprocess.run", lambda *a, **k: Done(0, out="3.2.1\n")):
+            self.assertEqual(_mfa_status("/x/mfa"), (True, "/x/mfa (3.2.1)"))
+        self.assertFalse(_mfa_status(None)[0])
+
     def test_doctor_lists_every_stage(self):
         from wordalign.doctor import collect
         stages = {row[0] for row in collect()}
