@@ -7,8 +7,9 @@ The bundle runs with a bare system PATH, so it has to bring its own
 Python, FFmpeg and Vosk libraries -- exactly what an end user's machine
 looks like. Checks, in order:
 
-1. ``--version`` prints the expected version, and ``--help`` lists the
-   2.1 flags (catches modules PyInstaller left out);
+1. ``--version`` prints the expected version, ``--help`` lists the 2.1
+   and 2.2 flags and ``--doctor`` runs (catches modules PyInstaller left
+   out);
 2. a reference-mode run on the test clip writes SRT, WebVTT and ASS;
 3. with ``--vosk-models``: a Vosk run times most words with Vosk (the
    bundled libvosk and its DLLs load and work);
@@ -77,8 +78,12 @@ def check_cli(exe: Path, env: dict, version: str) -> None:
     out = run([exe, "--version"], env)
     check(version in out, f"--version reports {version}")
     out = run([exe, "--help"], env)
-    for flag in ("--formats", "--batch", "--diarize", "--max-lines"):
+    for flag in ("--formats", "--batch", "--diarize", "--max-lines",
+                 "--cleanup", "--voters", "--timing", "--doctor"):
         check(flag in out, f"--help lists {flag}")
+    out = run([exe, "--doctor"], env)
+    for stage in ("[1 analysis]", "[3 voting]", "[5 timing]"):
+        check(stage in out, f"--doctor reports {stage}")
 
 
 def check_reference_run(exe: Path, env: dict, workdir: Path) -> None:

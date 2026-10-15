@@ -37,17 +37,19 @@ from ..utils import (detect_language, extract_tags_from_transcript,
                      time_to_ms)
 from .config import JobContext, PipelineProfile, SegmentationConfig
 from .converters import dict_segment_to_typed, dicts_to_words
+from ..engines._worker import WorkerCancelled
 from .errors import PipelineCancelled
 from .events import (CancelledEvent, ErrorEvent, PipelineCompleted,
                      PipelineEvent, PipelineStarted, StageCompleted,
                      StageMessage, StageStarted, EventSink)
+from .robust_stages import RobustStagesMixin
 from .types import PipelineResult
 
 
 _SEGMENTATION_LOCK = threading.RLock()
 
 
-class PipelineRunner:
+class PipelineRunner(RobustStagesMixin):
     """Orchestrates the full word-align pipeline.
 
     Parameters
@@ -78,6 +80,9 @@ class PipelineRunner:
         self._errors: List[str] = []
         self._primary_attempted: set = set()
         self._apply_profile()
+        # Words SE-DiCoW adds belong to another speaker: label speakers.
+        if self.config.overlap_asr:
+            self.config.diarize = True
 
     def _profile_for_config(self, cfg: PipelineConfig) -> PipelineProfile:
         if cfg.profile_name:
@@ -127,6 +132,8 @@ class PipelineRunner:
             self.config.use_tags = bool(overrides["tags"])
         else:
             self.config.use_tags = self.config.use_tags or self.profile.export.tags
+        if self._profile_explicit:
+            self._apply_robust_profile()
         self.config.doc_format = self.profile.export.transcript_format
         self.config.doc_timestamps = self.profile.export.transcript_timestamps
         self.config.qa = self.config.qa or self.profile.qa.enabled
@@ -135,6 +142,29 @@ class PipelineRunner:
                 setattr(self.config, f"use_{name}", bool(value))
             elif name == "mfa":
                 self.config.use_mfa = bool(value)
+
+    _ROBUST_FIELDS = ("analysis", "sound_events", "hallucination_filter",
+                      "cleanup", "overlap_map", "overlap_asr", "dash_cues",
+                      "forced_align", "triage")
+
+    def _apply_robust_profile(self) -> None:
+        """Profile robust settings, then explicit CLI flags on top."""
+        cfg = self.config
+        rb = self.profile.robust
+        for name in self._ROBUST_FIELDS:
+            value = getattr(rb, name, None)
+            if value is not None:
+                setattr(cfg, name, value)
+        if rb.voters is not None:
+            cfg.voters = tuple(rb.voters)
+        if rb.voter_priors:
+            cfg.voter_priors = {str(k): float(v) for k, v in dict(rb.voter_priors).items()}
+        if rb.diarize is not None:
+            cfg.diarize = bool(rb.diarize) or cfg.diarize
+        if self.profile.timing.strategy in ("anchor", "fill_only"):
+            cfg.timing_strategy = self.profile.timing.strategy
+        for name, value in cfg.robust_overrides.items():
+            setattr(cfg, name, value)
 
     @staticmethod
     def _has_content(payload) -> bool:
@@ -155,7 +185,8 @@ class PipelineRunner:
     # Engines that load a model onto the GPU. Only one runs at a time in the
     # process (WORDALIGN_GPU_SLOTS), so concurrent jobs queue for the GPU
     # instead of running out of memory; CPU stages still overlap.
-    _GPU_ENGINES = frozenset({"whisperx", "qwen"})
+    _GPU_ENGINES = frozenset({"whisperx", "qwen", "cohere", "parakeet",
+                              "analysis", "diarize", "enhance", "sedicow"})
 
     @contextmanager
     def _gpu_slot(self, plugin_id: str):
@@ -267,8 +298,18 @@ class PipelineRunner:
             result = PipelineResult(cancelled=True)
             return result
         try:
-            result = self._run()
+            try:
+                result = self._run()
+            finally:
+                self._cleanup_workdir()
         except PipelineCancelled:
+            self.cancelled = True
+            self._emit(CancelledEvent(stage=self._cancel_stage))
+            return PipelineResult(cancelled=True)
+        except (WorkerCancelled, InterruptedError):
+            # A backend worker noticed the cancel first; same outcome.
+            if not (self.ctx.cancel_requested or self.ctx.cancel_event.is_set()):
+                raise
             self.cancelled = True
             self._emit(CancelledEvent(stage=self._cancel_stage))
             return PipelineResult(cancelled=True)
@@ -367,6 +408,23 @@ class PipelineRunner:
         primary_was_run: bool = False
         legacy_mode = bool(cfg.use_legacy_ensemble and not cfg.transcript_path)
         srt_cue_boundaries: List[Tuple[int, int]] = []
+        # v2.2 robust flow: anchors + forced alignment, VAD-gated voting.
+        anchor_mode = cfg.timing_strategy != "fill_only" and not legacy_mode
+        timed_sources: Dict[str, List[Dict]] = {}
+        self._qmap = None
+        self._vote_chunks = None
+        self._removals = []
+        self._asr_audio = cfg.audio_path
+        self._turns = None
+        self._timing_stats = None
+        self._review_cues = None
+        self._analysis_stage()
+        self._check_cancel("analysis")
+        if anchor_mode:
+            self._diarize_early()
+            self._check_cancel("diarization")
+            self._cleanup_stage()
+            self._check_cancel("cleanup")
 
         if cfg.transcript_path:
             try:
@@ -422,9 +480,21 @@ class PipelineRunner:
                 primary_transcript_words = ensemble_conf or []
                 primary_engine = "legacy"
             else:
+                # Anchor mode votes inside _run_primary_transcript (and
+                # leaves the voters' timed words in self._voting_sources).
+                self._voting_sources = None
                 primary_transcript_words, original_text, wx_events, primary_engine = \
                     self._run_primary_transcript(cfg, language)
                 ensemble_conf = primary_transcript_words
+                if anchor_mode:
+                    timed_sources = dict(self._voting_sources or {})
+                    if not timed_sources and any(
+                            w.get("start") is not None for w in primary_transcript_words):
+                        # A primary step that returned timed words (one
+                        # engine, or a custom hook): its times are a source.
+                        timed_sources[self._source_name(primary_engine)] = [
+                            w for w in primary_transcript_words
+                            if w.get("start") is not None and w.get("end") is not None]
             primary_was_run = True
             self._check_cancel("primary")
             if not original_text:
@@ -471,7 +541,9 @@ class PipelineRunner:
         # waterfall engines below would have nothing left to fill. Mark the
         # primary's timings as provisional so Vosk/Qwen can refine them.
         refinable_sources: set = set()
-        if primary_transcript_words:
+        if anchor_mode and primary_transcript_words:
+            self._carry_text_conf(aligned_words, primary_transcript_words)
+        if primary_transcript_words and not anchor_mode:
             primary_source = {
                 "legacy": "Legacy ensemble",
                 "whisperx": "WhisperX",
@@ -486,178 +558,207 @@ class PipelineRunner:
                                 message=f"Prepared {len(aligned_words)} words for alignment"))
         result.aligned_words = dicts_to_words(aligned_words)
 
-        # --- Waterfall (timing refinement) ---
-        # Order per design:
-        #   1. Vosk       — best per-word timing, lower recall on text
-        #   2. (rough SRT — only if --srt was given; carries over from CLI)
-        #   3. Qwen3-ASR  — good at both jobs; can fix Vosk's mis-boundaries
-        #   4. WhisperX   — strongest diarization + alignment
-        #   5. MFA        — surgical per-word timing (last resort)
-        # In ensemble mode, the primary WhisperX run already seeded `aligned_words`
-        # with timings, so we skip the duplicate WhisperX pass.
-
-        if (cfg.use_vosk and not legacy_mode and primary_engine != "vosk"
-                and self._stage_enabled("vosk")):
-            self._emit(StageStarted(stage="vosk", message="Running Vosk (parallel)"))
-            t0 = time.time()
-            from ..engines.vosk_engine import VOSK_AVAILABLE, run_vosk_parallel
-            model_path = cfg.vosk_model_path(language)
-            if VOSK_AVAILABLE and model_path:
-                vosk_words, cache_hit = self._cached_engine(
-                    "vosk", model_path, language, {"workers": 4},
-                    lambda: run_vosk_parallel(
-                        cfg.audio_path, model_path,
-                        cancel_event=self.ctx.cancel_event))
-                if cache_hit:
-                    self._emit(StageMessage(stage="vosk",
-                                            message="Loaded Vosk output from cache."))
-                match_timestamps(aligned_words, vosk_words, "Vosk",
-                                 human_words_norm,
-                                 replace_sources=refinable_sources)
-                del vosk_words
-                gc.collect()
+        if anchor_mode:
+            if cfg.transcript_path:
+                timed_sources, ref_events = self._reference_sources(language)
+                wx_events = ref_events or wx_events
             else:
-                self._emit(StageMessage(stage="vosk",
-                                        message="Vosk stage skipped (library or model missing).",
-                                        level="warn"))
-            self._emit(StageCompleted(stage="vosk",
-                                       duration_seconds=time.time() - t0))
-        self._check_cancel("vosk")
+                if cfg.srt_path and self._stage_enabled("rough_srt"):
+                    timed_sources["SRT"] = self._rough_srt_words()
+                engine_sources = [k for k in timed_sources if k != "SRT"]
+                if (cfg.use_vosk and "Vosk" not in timed_sources
+                        and self._stage_enabled("vosk")):
+                    if len(engine_sources) >= 2 and self._aligner_available(language):
+                        # Two timed voters already give strong anchors and the
+                        # forced aligner does the rest; Vosk would only add
+                        # CPU time (its large English model is slow to load).
+                        self._emit(StageMessage(
+                            stage="vosk",
+                            message=f"Vosk skipped: {len(engine_sources)} timed voters "
+                                    f"({', '.join(engine_sources)}) already anchor the timing."))
+                    else:
+                        vosk_words = self._run_vosk(language)
+                        if vosk_words:
+                            timed_sources["Vosk"] = vosk_words
+            self._timing_stats = self._timing_anchor(language, aligned_words,
+                                                     timed_sources)
+            print_alignment_statistics(aligned_words)
+            self._check_cancel("interpolation")
+        else:
+            # --- Waterfall (timing refinement) ---
+            # Order per design:
+            #   1. Vosk       — best per-word timing, lower recall on text
+            #   2. (rough SRT — only if --srt was given; carries over from CLI)
+            #   3. Qwen3-ASR  — good at both jobs; can fix Vosk's mis-boundaries
+            #   4. WhisperX   — strongest diarization + alignment
+            #   5. MFA        — surgical per-word timing (last resort)
+            # In ensemble mode, the primary WhisperX run already seeded `aligned_words`
+            # with timings, so we skip the duplicate WhisperX pass.
 
-        if cfg.srt_path and self._stage_enabled("rough_srt"):
-            self._emit(StageStarted(stage="rough_srt", message="Loading rough SRT"))
-            t0 = time.time()
-            try:
-                with open(cfg.srt_path, "r", encoding="utf-8") as f:
-                    subs = list(srt.parse(f.read()))
-                srt_words = []
-                for s in subs:
-                    words_in_sub = s.content.split()
-                    duration = (s.end - s.start).total_seconds()
-                    per_word = duration / len(words_in_sub) if words_in_sub else 0
-                    for i, w in enumerate(words_in_sub):
-                        srt_words.append({
-                            "word": w,
-                            "start": s.start.total_seconds() + i * per_word,
-                            "end": s.start.total_seconds() + (i + 1) * per_word})
-                match_timestamps(aligned_words, srt_words, "SRT",
-                                 human_words_norm)
-                del srt_words
-                gc.collect()
-            except Exception as exc:
-                self._emit(StageMessage(stage="rough_srt",
-                                        message=f"Error loading SRT: {exc}",
-                                        level="warn"))
-            self._emit(StageCompleted(stage="rough_srt",
-                                       duration_seconds=time.time() - t0))
-        self._check_cancel("rough_srt")
-
-        # Qwen already ran (and produced nothing) if the primary step fell
-        # through it to Vosk; running the same model again cannot help.
-        if (cfg.use_qwen and not legacy_mode and primary_engine != "qwen"
-                and "qwen" not in self._primary_attempted
-                and self._stage_enabled("qwen")):
-            self._emit(StageStarted(stage="qwen", message="Running Qwen3-ASR (timing)"))
-            t0 = time.time()
-            try:
-                from ..engines.qwen_engine import run_qwen
-                qw_words, cache_hit = self._cached_engine(
-                    "qwen", cfg.qwen_models_dir, language,
-                    {"chunk_seconds": cfg.qwen_chunk_seconds,
-                     "asr_model": cfg.qwen_asr_model,
-                     "aligner_model": cfg.qwen_aligner_model},
-                    lambda: run_qwen(
-                        cfg.audio_path, language,
-                        qwen_python=cfg.qwen_python,
-                        models_dir=cfg.qwen_models_dir,
-                         chunk_seconds=cfg.qwen_chunk_seconds,
-                         asr_model=cfg.qwen_asr_model,
-                         aligner_model=cfg.qwen_aligner_model,
-                         cancel_event=self.ctx.cancel_event))
-
-                if cache_hit:
-                    self._emit(StageMessage(stage="qwen",
-                                            message="Loaded Qwen output from cache."))
-                if qw_words:
-                    match_timestamps(aligned_words, qw_words, "Qwen3-ASR",
+            if (cfg.use_vosk and not legacy_mode and primary_engine != "vosk"
+                    and self._stage_enabled("vosk")):
+                self._emit(StageStarted(stage="vosk", message="Running Vosk (parallel)"))
+                t0 = time.time()
+                from ..engines.vosk_engine import VOSK_AVAILABLE, run_vosk_parallel
+                model_path = cfg.vosk_model_path(language)
+                if VOSK_AVAILABLE and model_path:
+                    vosk_words, cache_hit = self._cached_engine(
+                        "vosk", model_path, language, {"workers": 4},
+                        lambda: run_vosk_parallel(
+                            cfg.audio_path, model_path,
+                            cancel_event=self.ctx.cancel_event))
+                    if cache_hit:
+                        self._emit(StageMessage(stage="vosk",
+                                                message="Loaded Vosk output from cache."))
+                    match_timestamps(aligned_words, vosk_words, "Vosk",
                                      human_words_norm,
                                      replace_sources=refinable_sources)
+                    del vosk_words
+                    gc.collect()
                 else:
-                    self._emit(StageMessage(stage="qwen",
-                                            message="Qwen3-ASR returned no words; skipping.",
+                    self._emit(StageMessage(stage="vosk",
+                                            message="Vosk stage skipped (library or model missing).",
                                             level="warn"))
-                del qw_words
+                self._emit(StageCompleted(stage="vosk",
+                                           duration_seconds=time.time() - t0))
+            self._check_cancel("vosk")
+
+            if cfg.srt_path and self._stage_enabled("rough_srt"):
+                self._emit(StageStarted(stage="rough_srt", message="Loading rough SRT"))
+                t0 = time.time()
+                try:
+                    with open(cfg.srt_path, "r", encoding="utf-8") as f:
+                        subs = list(srt.parse(f.read()))
+                    srt_words = []
+                    for s in subs:
+                        words_in_sub = s.content.split()
+                        duration = (s.end - s.start).total_seconds()
+                        per_word = duration / len(words_in_sub) if words_in_sub else 0
+                        for i, w in enumerate(words_in_sub):
+                            srt_words.append({
+                                "word": w,
+                                "start": s.start.total_seconds() + i * per_word,
+                                "end": s.start.total_seconds() + (i + 1) * per_word})
+                    match_timestamps(aligned_words, srt_words, "SRT",
+                                     human_words_norm)
+                    del srt_words
+                    gc.collect()
+                except Exception as exc:
+                    self._emit(StageMessage(stage="rough_srt",
+                                            message=f"Error loading SRT: {exc}",
+                                            level="warn"))
+                self._emit(StageCompleted(stage="rough_srt",
+                                           duration_seconds=time.time() - t0))
+            self._check_cancel("rough_srt")
+
+            # Qwen already ran (and produced nothing) if the primary step fell
+            # through it to Vosk; running the same model again cannot help.
+            if (cfg.use_qwen and not legacy_mode and primary_engine != "qwen"
+                    and "qwen" not in self._primary_attempted
+                    and self._stage_enabled("qwen")):
+                self._emit(StageStarted(stage="qwen", message="Running Qwen3-ASR (timing)"))
+                t0 = time.time()
+                try:
+                    from ..engines.qwen_engine import run_qwen
+                    qw_words, cache_hit = self._cached_engine(
+                        "qwen", cfg.qwen_models_dir, language,
+                        {"chunk_seconds": cfg.qwen_chunk_seconds,
+                         "asr_model": cfg.qwen_asr_model,
+                         "aligner_model": cfg.qwen_aligner_model},
+                        lambda: run_qwen(
+                            cfg.audio_path, language,
+                            qwen_python=cfg.qwen_python,
+                            models_dir=cfg.qwen_models_dir,
+                             chunk_seconds=cfg.qwen_chunk_seconds,
+                             asr_model=cfg.qwen_asr_model,
+                             aligner_model=cfg.qwen_aligner_model,
+                             cancel_event=self.ctx.cancel_event))
+
+                    if cache_hit:
+                        self._emit(StageMessage(stage="qwen",
+                                                message="Loaded Qwen output from cache."))
+                    if qw_words:
+                        match_timestamps(aligned_words, qw_words, "Qwen3-ASR",
+                                         human_words_norm,
+                                         replace_sources=refinable_sources)
+                    else:
+                        self._emit(StageMessage(stage="qwen",
+                                                message="Qwen3-ASR returned no words; skipping.",
+                                                level="warn"))
+                    del qw_words
+                    gc.collect()
+                except Exception as exc:
+                    self._emit(StageMessage(stage="qwen",
+                                            message=f"Qwen stage failed: {exc}",
+                                            level="warn"))
+                self._emit(StageCompleted(stage="qwen",
+                                           duration_seconds=time.time() - t0))
+            self._check_cancel("qwen")
+
+            # Skip the second WhisperX pass in ensemble mode — the primary run
+            # already produced the timings. Reference mode still needs it.
+            # Also skip if --no-whisperx was passed.
+            if (not primary_was_run and cfg.use_whisperx
+                    and self._stage_enabled("whisperx")):
+                self._emit(StageStarted(stage="whisperx", message="Running WhisperX"))
+                t0 = time.time()
+                from ..engines.whisperx_engine import run_whisperx
+                wx_output, cache_hit = self._cached_engine(
+                    "whisperx", cfg.whisper_model, language,
+                    {"device": cfg.device, "models_dir": cfg.model_paths.whisper_models_dir},
+                    lambda: run_whisperx(
+                        cfg.audio_path, language, cfg.whisper_model, cfg.device,
+                        cfg.model_paths.whisper_models_dir,
+                        cancel_event=self.ctx.cancel_event))
+                wx_words, wx_events = wx_output
+                if cache_hit:
+                    self._emit(StageMessage(stage="whisperx",
+                                            message="Loaded WhisperX output from cache."))
+                match_timestamps(aligned_words, wx_words, "WhisperX",
+                                 human_words_norm)
+                del wx_words
                 gc.collect()
-            except Exception as exc:
-                self._emit(StageMessage(stage="qwen",
-                                        message=f"Qwen stage failed: {exc}",
-                                        level="warn"))
-            self._emit(StageCompleted(stage="qwen",
-                                       duration_seconds=time.time() - t0))
-        self._check_cancel("qwen")
-
-        # Skip the second WhisperX pass in ensemble mode — the primary run
-        # already produced the timings. Reference mode still needs it.
-        # Also skip if --no-whisperx was passed.
-        if (not primary_was_run and cfg.use_whisperx
-                and self._stage_enabled("whisperx")):
-            self._emit(StageStarted(stage="whisperx", message="Running WhisperX"))
-            t0 = time.time()
-            from ..engines.whisperx_engine import run_whisperx
-            wx_output, cache_hit = self._cached_engine(
-                "whisperx", cfg.whisper_model, language,
-                {"device": cfg.device, "models_dir": cfg.model_paths.whisper_models_dir},
-                lambda: run_whisperx(
-                    cfg.audio_path, language, cfg.whisper_model, cfg.device,
-                    cfg.model_paths.whisper_models_dir,
-                    cancel_event=self.ctx.cancel_event))
-            wx_words, wx_events = wx_output
-            if cache_hit:
+                self._emit(StageCompleted(stage="whisperx",
+                                           duration_seconds=time.time() - t0))
+            elif primary_was_run:
                 self._emit(StageMessage(stage="whisperx",
-                                        message="Loaded WhisperX output from cache."))
-            match_timestamps(aligned_words, wx_words, "WhisperX",
-                             human_words_norm)
-            del wx_words
-            gc.collect()
-            self._emit(StageCompleted(stage="whisperx",
-                                       duration_seconds=time.time() - t0))
-        elif primary_was_run:
-            self._emit(StageMessage(stage="whisperx",
-                                    message="Skipped — already ran as the primary transcript engine.",
-                                    level="info"))
-        elif not cfg.use_whisperx:
-            self._emit(StageMessage(stage="whisperx",
-                                    message="Skipped (--no-whisperx).",
-                                    level="info"))
-        self._check_cancel("whisperx")
+                                        message="Skipped — already ran as the primary transcript engine.",
+                                        level="info"))
+            elif not cfg.use_whisperx:
+                self._emit(StageMessage(stage="whisperx",
+                                        message="Skipped (--no-whisperx).",
+                                        level="info"))
+            self._check_cancel("whisperx")
 
-        from ..engines.mfa_engine import mfa_supports_language
-        if (cfg.use_mfa and self._stage_enabled("mfa")
-                and not mfa_supports_language(language)):
-            self._emit(StageMessage(
-                stage="mfa",
-                message=f"MFA skipped: no pretrained MFA model for language "
-                        f"'{language}'.", level="warn"))
-        elif cfg.use_mfa and self._stage_enabled("mfa"):
-            self._emit(StageStarted(stage="mfa", message="Running MFA surgical mode"))
+            from ..engines.mfa_engine import mfa_supports_language
+            if (cfg.use_mfa and self._stage_enabled("mfa")
+                    and not mfa_supports_language(language)):
+                self._emit(StageMessage(
+                    stage="mfa",
+                    message=f"MFA skipped: no pretrained MFA model for language "
+                            f"'{language}'.", level="warn"))
+            elif cfg.use_mfa and self._stage_enabled("mfa"):
+                self._emit(StageStarted(stage="mfa", message="Running MFA surgical mode"))
+                t0 = time.time()
+                make_surgical_mfa(aligned_words, cfg.audio_path, cfg.mfa_cmd,
+                                  language)
+                self._emit(StageCompleted(stage="mfa",
+                                           duration_seconds=time.time() - t0))
+            self._check_cancel("mfa")
+
+            self._emit(StageStarted(stage="interpolation", message="Interpolating remaining timestamps"))
             t0 = time.time()
-            make_surgical_mfa(aligned_words, cfg.audio_path, cfg.mfa_cmd,
-                              language)
-            self._emit(StageCompleted(stage="mfa",
+            interpolate_timestamps(aligned_words)
+            print_alignment_statistics(aligned_words)
+            self._emit(StageCompleted(stage="interpolation",
                                        duration_seconds=time.time() - t0))
-        self._check_cancel("mfa")
-
-        self._emit(StageStarted(stage="interpolation", message="Interpolating remaining timestamps"))
-        t0 = time.time()
-        interpolate_timestamps(aligned_words)
-        print_alignment_statistics(aligned_words)
-        self._emit(StageCompleted(stage="interpolation",
-                                   duration_seconds=time.time() - t0))
-        self._check_cancel("interpolation")
+            self._check_cancel("interpolation")
 
         if cfg.diarize:
             self._diarize(cfg, aligned_words, ensemble_conf)
             self._check_cancel("diarization")
+        elif self._qmap is not None and self._turns:
+            pass   # overlap map only (no speaker labels requested)
 
         # Update typed results
         result.aligned_words = dicts_to_words(aligned_words, 0)
@@ -670,6 +771,17 @@ class PipelineRunner:
         with self._job_layout(seg_cfg):
             segments = self._segment_transcript(
                 original_text, aligned_words, srt_cue_boundaries, seg_cfg)
+        if cfg.dash_cues and any(seg.get("speaker") for seg in segments):
+            from ..segment import merge_dash_cues
+            with self._job_layout(seg_cfg):
+                before = len(segments)
+                segments = merge_dash_cues(segments, getattr(self._qmap, "overlaps", None)
+                                           if self._qmap is not None else None,
+                                           style=cfg.dash_style)
+            if len(segments) != before:
+                self._emit(StageMessage(
+                    stage="segmentation",
+                    message=f"{before - len(segments)} two-speaker dash cue(s)"))
         self._emit(StageCompleted(stage="segmentation",
                                    duration_seconds=time.time() - t0))
         result.segments = [dict_segment_to_typed(s) for s in segments]
@@ -789,8 +901,13 @@ class PipelineRunner:
             result.transcript_txt_path = transcript_paths.get("transcript_txt_path")
             result.transcript_docx_path = transcript_paths.get("transcript_docx_path")
 
-        # Tags
-        if cfg.use_tags and human_tags and srt is not None:
+        # Tags: timed sound events from the analysis stage when available.
+        sed_events = (self._qmap.sed_events if self._qmap is not None else [])
+        if cfg.use_tags and sed_events and srt is not None:
+            self._write_sed_tags(base, original_text, human_tags, sed_events,
+                                 sentence_entries, result,
+                                 proposed=not cfg.transcript_path)
+        elif cfg.use_tags and human_tags and srt is not None:
             from ..tags import (combine_and_sort_srt, detect_audio_tags_yamnet,
                                 match_human_tags_to_detections, optimize_tags)
             all_detected = list(wx_events)
@@ -817,6 +934,23 @@ class PipelineRunner:
                     f.write(srt.compose(combined))
                 result.combined_srt_path = path2
 
+        if anchor_mode and segments:
+            try:
+                result.review_json_path = self._write_triage(
+                    base, segments, aligned_words,
+                    "reference" if cfg.transcript_path else "ensemble")
+            except Exception as exc:
+                self._emit(StageMessage(stage="triage",
+                                        message=f"Review triage failed: {exc}",
+                                        level="warn"))
+        if self._timing_stats:
+            result.statistics["timing"] = {k: v for k, v in self._timing_stats.items()
+                                           if k != "window_failures"}
+        if self._qmap is not None:
+            result.statistics["analysis"] = self._qmap.summary()
+        if self._removals:
+            result.statistics["hallucinations_removed"] = len(self._removals)
+        result.statistics["stage_seconds"] = dict(self._stage_durations)
         result.aligned_words = dicts_to_words(aligned_words, 0)
         result.consensus = dicts_to_words(ensemble_conf) if ensemble_conf else None
         source_counts: Dict[str, int] = {}
@@ -839,7 +973,7 @@ class PipelineRunner:
                         ("mfa", cfg.use_mfa),
                         ("diarize", cfg.diarize),
                     ) if enabled
-                ],
+                ] + [v for v in (cfg.voters or ()) if v not in ("whisperx", "qwen", "vosk")],
                 models_used=[
                     value for value in (
                         cfg.whisper_model if cfg.use_whisperx else None,
@@ -963,8 +1097,10 @@ class PipelineRunner:
         self._emit(StageStarted(stage="diarization", message="Detecting speakers"))
         t0 = time.time()
         try:
-            turns = diarize_turns(cfg.audio_path, num_speakers=cfg.num_speakers,
-                                  cache_dir=cfg.model_paths.huggingface_cache_dir)
+            turns = getattr(self, "_turns", None) or diarize_turns(
+                cfg.audio_path, num_speakers=cfg.num_speakers,
+                cache_dir=cfg.model_paths.huggingface_cache_dir,
+                cancel_event=self.ctx.cancel_event)
         except DiarizationUnavailable as exc:
             self._emit(StageMessage(
                 stage="diarization",
@@ -993,6 +1129,11 @@ class PipelineRunner:
             for e, seg in zip(entries, segments):
                 speaker = seg.get("speaker")
                 content = e.content
+                if seg.get("dash_cue"):
+                    # Dashes already mark the two speakers.
+                    out.append(srt.Subtitle(e.index, e.start, e.end, content))
+                    previous = None
+                    continue
                 if speaker and speaker != previous:
                     flat = " ".join(content.split())
                     content = balance_block_enhanced(f"{speaker}: {flat}")
@@ -1011,11 +1152,28 @@ class PipelineRunner:
         return consensus_to_structured_text(
             words, max_chars=self.profile.segmentation.max_cpl)
 
+    @staticmethod
+    def _source_name(engine: Optional[str]) -> str:
+        return {
+            "legacy": "Legacy ensemble",
+            "whisperx": "WhisperX",
+            "qwen": "Qwen3-ASR",
+            "vosk": "Vosk",
+            "cohere": "Cohere",
+            "parakeet": "parakeet-ultra",
+            "vote": "Voted",
+        }.get(engine or "", "Primary ASR")
+
     def _run_primary_transcript(self, cfg: PipelineConfig, language: str):
         """Ensemble-mode step 1: produce the canonical transcript.
 
-        Per the design contract, Whisper is the best ASR in the toolbox, so
-        it produces the canonical text and the initial word-level timings.
+        Anchor timing (the default): every voter transcribes the same VAD
+        speech chunks and ROVER fuses them (``_run_voting``); the voters'
+        own word times are kept in ``self._voting_sources`` for the timing
+        stage, which re-times the voted text with forced alignment.
+
+        ``fill_only`` (the v2.1 waterfall): WhisperX produces the canonical
+        text and the initial word timings, falling back to Qwen, then Vosk.
         Every subsequent engine (Vosk → Qwen → MFA) is only allowed to
         *replace* the timing of words they recognise — never the text.
 
@@ -1026,6 +1184,13 @@ class PipelineRunner:
                          preserved
             wx_events  : WhisperX audio events (used later for tag detection)
         """
+        if cfg.timing_strategy != "fill_only":
+            words, wx_events, sources, engine = self._run_voting(language)
+            if words and cfg.overlap_asr:
+                words = self._overlap_asr(language, words, sources)
+            self._voting_sources = sources
+            text = self._primary_text(words) if words else ""
+            return words, text, wx_events, engine
         wx_events: List[Dict] = []
         self._primary_attempted = set()
         if cfg.use_whisperx:

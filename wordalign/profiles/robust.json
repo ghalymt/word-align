@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "name": "Robust",
+    "description": "For bad audio: gated cleanup (music/crowd separation, partial denoising), Cohere + Qwen + parakeet + WhisperX voting, an overlap map from diarization, anchors + forced alignment on the original audio, review triage.",
+    "mode": "auto",
+    "transcription": {
+        "engines": [
+            {
+                "plugin": "cohere",
+                "enabled": true,
+                "weight": 1.0,
+                "device": "cuda"
+            },
+            {
+                "plugin": "qwen_asr",
+                "enabled": true,
+                "model": "qwen3-asr-1.7b",
+                "weight": 0.95,
+                "device": "cuda"
+            },
+            {
+                "plugin": "parakeet",
+                "enabled": true,
+                "weight": 0.85,
+                "device": "cuda"
+            },
+            {
+                "plugin": "whisperx",
+                "enabled": true,
+                "model": "large-v3",
+                "weight": 0.8,
+                "device": "cuda"
+            },
+            {
+                "plugin": "vosk",
+                "enabled": true,
+                "model": "vosk-model-en-us-0.22",
+                "weight": 0.4
+            }
+        ]
+    },
+    "timing": {
+        "strategy": "anchor",
+        "order": [
+            "vosk",
+            "rough_srt",
+            "qwen",
+            "whisperx",
+            "mfa",
+            "interpolation"
+        ]
+    },
+    "robust": {
+        "analysis": true,
+        "sound_events": true,
+        "hallucination_filter": true,
+        "cleanup": "auto",
+        "voters": [
+            "cohere",
+            "qwen",
+            "parakeet",
+            "whisperx"
+        ],
+        "forced_align": true,
+        "triage": true,
+        "overlap_map": true
+    },
+    "qa": {
+        "enabled": true,
+        "signals": {
+            "ensemble_disagreement": {
+                "enabled": true
+            },
+            "repetition": {
+                "enabled": true
+            },
+            "timing_anomaly": {
+                "enabled": true
+            }
+        }
+    },
+    "segmentation": {
+        "max_cpl": 42,
+        "max_lines": 2,
+        "max_duration_ms": 7000,
+        "min_cue_ms": 700
+    },
+    "export": {
+        "word_srt": true,
+        "sentence_srt": true,
+        "transcript_format": "txt",
+        "transcript_timestamps": true,
+        "tags": true
+    }
+}

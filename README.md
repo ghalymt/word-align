@@ -1,4 +1,4 @@
-# WordAlign 2.1
+# WordAlign 2.2
 
 **Speech-to-subtitle alignment & transcription, for humans and machines.**
 
@@ -18,7 +18,20 @@ The GUI runs in your browser (auto-opened), with **dark mode by default** — to
 
 ---
 
-## ✨ What's New in 2.1
+## ✨ What's New in 2.2 — bad audio
+
+- **🎧 Robust flow** — `--profile robust` (GUI preset *Robust*) for music beds, crowd and street noise, phone audio, crosstalk and long silences. Full guide: [docs/robust_flow.md](docs/robust_flow.md).
+- **📊 Audio analysis** — Silero VAD, SNR, phone-band and clipping detection, and timed sound events per chunk; cleanup (RoFormer separation, MossFormerGAN) runs only on the chunks that need it, and only for the engines that read text.
+- **🗳️ Engines vote** — Cohere Transcribe, Qwen3-ASR, parakeet-ultra, WhisperX (and Vosk) transcribe the same chunks and ROVER picks each word; an engine that hears nothing votes for silence, so invented lines disappear.
+- **⏱️ Anchors + forced alignment** — agreeing engines give anchors, Qwen3-ForcedAligner times the words between them on the original audio.
+- **✅ Review queue** — every cue is *Accept*, *Quick check* or *Redo*, with the reason. The GUI loops each cue, offers the engines' alternative readings as one-click fixes and saves your corrections to a separate `_corrected.srt`.
+- **🗣️ Overlapping speech** — overlap map, SE-DiCoW for the second speaker, two-speaker dash cues.
+- **📏 Benchmark** — `wordalign-bench` measures WER, timing and invented words per condition on public data ([docs/benchmark.md](docs/benchmark.md)).
+- **🩺 Setup** — `scripts/install_robust.ps1` installs the optional backends; `wordalign --doctor` shows what was found. Every model and venv location is configurable.
+
+Upgrading from 2.1? Timing now uses anchors + forced alignment by default and every run writes a review file — see the [2.2 upgrade notes](CHANGELOG.md#220--2026-10-15).
+
+## In 2.1
 
 - **🎬 SRT, WebVTT and ASS** — `--formats srt,vtt,ass` (or the GUI toggles); ASS keeps the job's own line layout for burn-in.
 - **🗣️ Speaker labels** — `--diarize` (pyannote.audio): cues never mix speakers; names appear as VTT voices, the ASS Name field, an SRT prefix and transcript paragraphs.
@@ -29,7 +42,7 @@ The GUI runs in your browser (auto-opened), with **dark mode by default** — to
 - **🔒 Safer GUI server** — other websites can no longer drive or read the local API, and uploads stream to disk.
 - **✅ Accuracy tests in CI** — golden-file tests plus a real-audio timing check on every pull request.
 
-Upgrading from 2.0? A few defaults changed — see the [upgrade notes in the changelog](CHANGELOG.md#upgrade-notes-behaviour-changes).
+Upgrading from 2.0? A few defaults changed — see the [2.1 upgrade notes in the changelog](CHANGELOG.md#210--2026-10-01).
 
 ### The 2.0 foundations
 
@@ -106,7 +119,7 @@ Engines:
   --engines LIST           whisperx,qwen,vosk,mfa (default: whisperx,qwen,vosk + MFA)
   --no-vosk / --no-qwen / --no-whisperx / --no-mfa / --use-mfa
                            Per-engine switches; they win over --engines and --profile
-  --profile NAME           cpu_only, fast, balanced, maximum_quality (or a .json file)
+  --profile NAME           cpu_only, fast, balanced, maximum_quality, robust (or a .json file)
   --legacy-ensemble        Old all-voters consensus instead of the primary-transcript flow
   --device cuda|cpu        Force the compute device
 
@@ -128,9 +141,20 @@ Review:
   --llm-model PATH         Main GGUF model
   --llm-mtp-model PATH     MTP draft GGUF (multi-token prediction); --no-mtp disables
 
+Robust flow (bad audio; see docs/robust_flow.md):
+  --cleanup off|auto|all   Clean noisy chunks for the ASR engines (robust: auto)
+  --voters LIST            cohere,qwen,parakeet,whisperx,vosk (transcript-free voting)
+  --overlap-map            Diarize first and flag overlapped speech
+  --overlap-asr            Transcribe overlapped speech per speaker (SE-DiCoW)
+  --dash-cues              Two-speaker dash cues (--dash-style "-" or "- ")
+  --timing anchor|fill_only  Anchors + forced alignment (default) or the 2.1 waterfall
+  --no-forced-align --no-vad --no-sound-events --no-hallucination-filter --no-triage
+  --doctor                 Show which stages are installed, and where
+
 Model locations (each also has an environment variable, see below):
   --vosk-models DIR  --whisper-models DIR  --qwen-models DIR  --hf-cache DIR
   --mfa-models DIR   --mfa PATH (mfa executable or conda env)  --qwen-python PATH
+  --models-dir DIR   Root of the models folder (robust-flow models live under it)
 
 GUI:
   --gui [--port N]         Start the web GUI (default port 5575)
@@ -148,14 +172,19 @@ wordalign --profile maximum_quality --qa --formats srt,vtt,ass video.mp4
 # Align a human transcript, vertical-video layout (32 CPL, up to 3 lines)
 wordalign interview.mp4 -t interview.txt --cpl 32 --max-lines 3
 
+# Bad audio: measure, clean where needed, vote, align, write a review queue
+wordalign --profile robust -l en street_interview.mp4
+
 # Use your locally installed models (no downloads)
 wordalign --vosk-models "D:\Subtitle edit\Vosk" --engines vosk -l en video.mp4
 ```
 
 ### Modes
 
-- **Reference mode** (`-t transcript`) — your transcript's words are kept exactly; the engines only supply timings, in a waterfall (Vosk → rough SRT → Qwen → WhisperX → MFA → interpolation) where each stage fills the words the earlier ones missed. An `.srt` transcript keeps its own cue boundaries (`[tags]` are skipped).
-- **Ensemble mode** (no transcript) — the best available engine (WhisperX, else Qwen, else Vosk) produces the transcript and first timings; Vosk and Qwen then **refine** those timings for the words they recognise (never moving a word by more than a second), and MFA fills any gaps. `--legacy-ensemble` switches to the older consensus vote across all engines.
+- **Reference mode** (`-t transcript`) — your transcript's words are kept exactly; the engines only supply timings. Where engines agree they set **anchors**, and Qwen3-ForcedAligner (or wav2vec2) times the words between anchors on the original audio; MFA and pause-aware interpolation fill the rest, and interpolated words are flagged for review. `--timing fill_only` uses the 2.1 waterfall (Vosk → rough SRT → Qwen → WhisperX → MFA → interpolation) instead. An `.srt` transcript keeps its own cue boundaries (`[tags]` are skipped).
+- **Ensemble mode** (no transcript) — the best available engine (WhisperX, else Qwen, else Vosk) produces the transcript; with `--voters` (or the robust profile) several engines transcribe the same VAD chunks and **vote** word by word. Timing then works as in reference mode. `--legacy-ensemble` switches to the older consensus vote across all engines.
+
+Every run with anchor timing (the default) also writes `<name>_review.json`: each cue is *Accept*, *Quick check* or *Redo*, with the reason (`--no-triage` turns it off).
 
 ### Batch mode
 
@@ -167,7 +196,7 @@ Every media file in the folder is processed with the same options. `talk.mp4` is
 
 ### Speaker labels
 
-`--diarize` uses [pyannote.audio](https://github.com/pyannote/pyannote-audio) (`pip install pyannote.audio`). Its model is gated: accept the terms of `pyannote/speaker-diarization-3.1` on Hugging Face once and set `HF_TOKEN`. Cues never mix two speakers; speakers appear as `<v Speaker 2>` in WebVTT, in the ASS Name field, as a `Speaker 2:` prefix in SRT whenever the speaker changes, and as paragraphs in the transcript. Without pyannote the stage is skipped with a warning.
+`--diarize` uses [pyannote.audio](https://github.com/pyannote/pyannote-audio) with the `speaker-diarization-community-1` pipeline (falling back to 3.1), in the WhisperX venv when one is installed. The model is gated: accept its terms on Hugging Face once and set `HF_TOKEN` (or log in with `huggingface-cli login`). Cues never mix two speakers; speakers appear as `<v Speaker 2>` in WebVTT, in the ASS Name field, as a `Speaker 2:` prefix in SRT whenever the speaker changes, and as paragraphs in the transcript. Without pyannote the stage is skipped with a warning.
 
 ---
 
@@ -226,6 +255,11 @@ The `/api/model-paths` endpoint (and the GUI panel) shows exactly what was resol
 | `WORDALIGN_GPU_SLOTS` | GPU engines loaded at the same time (default 1) |
 | `WORDALIGN_ALLOWED_HOSTS` | Extra host names the GUI server answers to (LAN setups) |
 | `HF_TOKEN`, `WORDALIGN_DIARIZATION_MODEL` | Access token / pipeline for `--diarize` |
+| `WORDALIGN_MODELS_DIR` | Root of the models folder (same as `--models-dir`) |
+| `WORDALIGN_VENVS_DIR` | Folder holding the backend venvs (`<name>\Scripts\python.exe`) |
+| `WORDALIGN_<NAME>_PYTHON` | One backend's Python: `COHERE`, `PARAKEET`, `SEPARATE`, `DENOISE`, `SED`, `DIARIZE`, `SEDICOW` |
+| `WORDALIGN_VAD_MODEL`, `WORDALIGN_SED_DIR` | Silero VAD file / PretrainedSED folder |
+| `WORDALIGN_HOME` | Where the calibrated triage weights live (default `~/.wordalign`) |
 
 ### GUI server security
 
@@ -243,7 +277,14 @@ word-align/
 │   ├── cli_v2.py          # CLI (2.0) — thin layer over PipelineRunner
 │   ├── batch.py           # --batch folder processing
 │   ├── subtitle_formats.py # WebVTT / ASS writers
-│   ├── diarize.py         # speaker labels (pyannote.audio)
+│   ├── diarize.py         # speaker labels + overlap map (pyannote Community-1)
+│   ├── timing.py          # anchors + forced-alignment windows + interpolation (2.2)
+│   ├── rover.py           # ROVER word voting across engines (2.2)
+│   ├── backends.py        # finds each backend's venv Python (2.2)
+│   ├── doctor.py          # --doctor: what is installed, per stage (2.2)
+│   ├── audio/             # 2.2 analysis + cleanup: io, vad (Silero ONNX), measures
+│   │                      #   (SNR, narrowband, clipping), analysis (quality map), prep
+│   ├── robustness/        # wordalign-bench: sources, suite builder, runner, metrics
 │   ├── core/
 │   │   ├── pipeline.py    # PipelineRunner — the single pipeline used by CLI + GUI
 │   │   ├── types.py, config.py, events.py
@@ -253,9 +294,12 @@ word-align/
 │   │   ├── manifest.py    # job manifests
 │   │   ├── recovery.py    # crash recovery / checkpoints
 │   │   ├── gpu_scheduler.py # one GPU model at a time across jobs
+│   │   ├── robust_stages.py # the 2.2 stages, mixed into PipelineRunner
 │   │   └── converters.py
 │   ├── engines/           # Engine adapters (plugin architecture)
 │   │   ├── vosk_engine.py, whisperx_engine.py, qwen_engine.py
+│   │   ├── voters.py      # Cohere / parakeet chunk voters (2.2)
+│   │   ├── _*_worker.py   # out-of-process workers, one per backend venv
 │   │   ├── mfa_engine.py  # 65+ language map, surgical gap alignment
 │   │   ├── yamnet_engine.py, nemo_engine.py   # nemo = legacy
 │   │   └── adapters/      # runtime adapters (in_process / subprocess / external)
@@ -264,13 +308,16 @@ word-align/
 │   ├── qa/                # Smart Transcript Review
 │   │   ├── punctuation.py # LLM + rule-based punctuation/capitalization
 │   │   ├── realignment.py, deterministic.py, engine.py, codeswitch.py
+│   │   ├── hallucination.py # drops words the audio does not support (2.2)
+│   │   ├── triage.py, triage_calibration.py # review tiers + weight fitting (2.2)
 │   │   └── providers/     # local transformers model, OpenAI-compatible endpoint
 │   ├── runtimes/          # Runtime detection (python, conda, external)
-│   ├── profiles/          # Quality presets (cpu_only, fast, balanced, maximum_quality)
-│   ├── gui/               # Web GUI (app.html, server.py, waveform.py)
+│   ├── profiles/          # Quality presets (cpu_only, fast, balanced, maximum_quality, robust)
+│   ├── gui/               # Web GUI (app.html, server.py, review.py, waveform.py)
 │   └── benchmark.py       # Benchmark suite
 ├── tests/                 # unit, integration, golden-file and real-audio accuracy tests
-└── docs/                  # architecture.md, developer.md, user_guide.md
+├── scripts/               # install_robust.ps1, fetch_models.py, smoke_robust.py, build helpers
+└── docs/                  # robust_flow.md, benchmark.md, architecture.md, developer.md, user_guide.md
 ```
 
 **Key design rule:** the CLI and the GUI both call the same `PipelineRunner`. There is no separate pipeline for the GUI — what you see in the browser is exactly what the CLI does.
@@ -290,6 +337,7 @@ CI runs the suite on Linux and Windows (Python 3.10 and 3.12) for every pull req
 
 - **Golden files** (`tests/golden/`) — recorded engine output goes through the real pipeline and every subtitle file must match the checked-in result byte for byte. After an intentional output change: `WORDALIGN_REGEN_GOLDEN=1 python -m pytest tests/test_golden.py`, then review the diff.
 - **Real-audio accuracy** — a speech clip with known word boundaries is aligned by a real Vosk model and the timing error must stay within bounds. CI downloads the model; locally set `WORDALIGN_TEST_VOSK_MODEL` to an unpacked Vosk model to run it.
+- **Robust flow** — `tests/test_robust_*.py` cover the analysis, voting, timing and triage stages with recorded or fake engines. On a machine with the backends installed, `python scripts/smoke_robust.py clip.wav` makes one real call per backend, and `wordalign-bench` ([docs/benchmark.md](docs/benchmark.md)) measures the whole flow.
 
 ---
 

@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -196,22 +197,29 @@ class TestPackaging(unittest.TestCase):
             self.assertEqual(run_qwen("audio.wav", "en"), [])
 
     def test_qwen_worker_normalizes_media_with_ffmpeg(self):
-        from wordalign.engines._qwen_worker import _normalize_audio
+        import numpy as np
+        from wordalign.engines._qwen_worker import _load_audio
         with tempfile.TemporaryDirectory() as directory:
             ffmpeg = Path(directory) / "ffmpeg.exe"
             ffmpeg.write_bytes(b"fake")
-            output = {}
+            seen = {}
 
             def fake_run(command, **_kwargs):
-                Path(command[-1]).write_bytes(b"RIFF" + b"0" * 128)
-                return None
+                seen["command"] = command
+                samples = np.linspace(-0.5, 0.5, 1600, dtype="<f4")
+                return subprocess.CompletedProcess(command, 0,
+                                                   stdout=samples.tobytes(),
+                                                   stderr=b"")
 
             with patch.dict(os.environ, {"WORDALIGN_FFMPEG": str(ffmpeg)}), \
                  patch("wordalign.engines._qwen_worker.subprocess.run",
                        side_effect=fake_run):
-                output["path"] = _normalize_audio("input.mp4")
-            self.assertTrue(Path(output["path"]).exists())
-            os.remove(output["path"])
+                audio = _load_audio("input.mp4")
+            # Any media is decoded by ffmpeg to 16 kHz mono float32.
+            self.assertEqual(seen["command"][0], str(ffmpeg))
+            self.assertIn("16000", seen["command"])
+            self.assertEqual(audio.dtype, np.float32)
+            self.assertEqual(len(audio), 1600)
 
     def test_project_metadata_is_present(self):
         data = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()

@@ -103,6 +103,9 @@ def run_whisperx(audio_path: str,
         return [], []
 
     whisperx_python = os.environ.get("WORDALIGN_WHISPERX_PYTHON")
+    if not whisperx_python:
+        from ..backends import backend_python
+        whisperx_python = backend_python("whisperx")
     models_dir = models_dir or os.environ.get("WORDALIGN_WHISPERX_MODELS")
 
     if not whisperx_python:
@@ -268,3 +271,52 @@ def _run_whisperx_inproc(audio_path: str,
                 os.environ.pop("HF_HOME", None)
             else:
                 os.environ["HF_HOME"] = previous_hf_home
+
+
+def wav2vec2_available() -> bool:
+    """True when a WhisperX venv (with its wav2vec2 aligner) is installed."""
+    if os.environ.get("WORDALIGN_WHISPERX_PYTHON"):
+        return True
+    from ..backends import backend_python
+    return backend_python("whisperx") is not None
+
+
+def wav2vec2_align(audio_path: str, windows: List[Dict], language: str,
+                   device: Optional[str] = None, models_dir: Optional[str] = None,
+                   cancel_event=None) -> Optional[List[Dict]]:
+    """Time known text windows with WhisperX's wav2vec2 aligner.
+
+    Same window format as :func:`wordalign.engines.qwen_engine.qwen_align`;
+    used for languages Qwen3-ForcedAligner does not cover. Returns None when
+    the WhisperX venv is missing or the worker fails.
+    """
+    import tempfile
+    from ..backends import backend_python
+    from ._worker import WorkerCancelled, WorkerError, run_worker
+    python = os.environ.get("WORDALIGN_WHISPERX_PYTHON") or backend_python("whisperx")
+    if not python or not windows:
+        return None if not windows else None
+    fd, tmp = tempfile.mkstemp(prefix="wa_wx_align_", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(windows, f, ensure_ascii=False)
+        args = ["--mode", "align", "--audio", str(audio_path), "--align-json", tmp,
+                "--language", language or "en"]
+        if device:
+            args += ["--device", device]
+        models_dir = models_dir or os.environ.get("WORDALIGN_WHISPERX_MODELS")
+        if models_dir:
+            args += ["--models-dir", models_dir]
+        payload = run_worker(python, _WORKER, args, SENTINEL,
+                             cancel_event=cancel_event, name="wav2vec2 aligner")
+    except WorkerCancelled:
+        return None
+    except WorkerError as exc:
+        print(f"[warn] {exc}")
+        return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return list(payload.get("windows", []))

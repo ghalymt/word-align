@@ -239,6 +239,78 @@ def detect_audio_tags_yamnet(audio_path: str, human_tags: set,
     return merged
 
 
+# AudioSet-strong class -> SDH tag text, for the classes worth a caption.
+# Speech and generic background classes are deliberately absent.
+SDH_LABELS = {
+    "Music": "music", "Singing": "singing", "Male singing": "singing",
+    "Female singing": "singing", "Choir": "choir singing", "Humming": "humming",
+    "Whistling": "whistling", "Laughter": "laughter", "Giggle": "giggles",
+    "Chuckle, chortle": "chuckles", "Belly laugh": "laughs", "Snicker": "snickers",
+    "Applause": "applause", "Clapping": "clapping", "Cheering": "cheering",
+    "Crowd": "crowd chatter", "Hubbub, speech noise, speech babble": "indistinct chatter",
+    "Booing": "booing", "Crying, sobbing": "crying", "Baby cry, infant cry": "baby crying",
+    "Screaming": "screaming", "Shout": "shouting", "Yell": "yelling", "Gasp": "gasps",
+    "Sigh": "sighs", "Cough": "coughs", "Sneeze": "sneezes", "Throat clearing": "clears throat",
+    "Sniff": "sniffs", "Breathing": "breathing", "Groan": "groans", "Yawn": "yawns",
+    "Snoring": "snoring", "Dog": "dog barking", "Bark": "dog barking", "Cat": "cat meowing",
+    "Meow": "cat meowing", "Bird vocalization, bird call, bird song": "birds chirping",
+    "Telephone bell ringing": "phone ringing", "Ringtone": "phone ringing",
+    "Doorbell": "doorbell", "Knock": "knocking", "Door": "door",
+    "Walk, footsteps": "footsteps", "Gunshot, gunfire": "gunshot",
+    "Explosion": "explosion", "Siren": "siren", "Police car (siren)": "police siren",
+    "Ambulance (siren)": "ambulance siren", "Fire alarm": "alarm", "Alarm": "alarm",
+    "Thunder": "thunder", "Thunderstorm": "thunderstorm", "Rain": "rain",
+    "Wind": "wind blowing", "Vehicle horn, car horn, honking, toot": "car horn",
+    "Helicopter": "helicopter", "Aircraft": "aircraft", "Train horn": "train horn",
+    "Engine starting": "engine starts", "Glass shatter": "glass shatters",
+    "Smash, crash": "crash", "Slam": "door slams", "Beep, bleep": "beeping",
+    "Typing": "typing", "Clock": "clock ticking", "Tick-tock": "clock ticking",
+    "Water tap, faucet": "water running", "Toilet flush": "toilet flushes",
+    "Fireworks": "fireworks", "Heart sounds, heartbeat": "heartbeat",
+}
+# Minimum event length (s) before a proposed tag is worth a caption.
+_MIN_TAG_S = {"music": 2.0, "singing": 1.5, "rain": 2.0, "wind blowing": 2.0,
+              "crowd chatter": 1.5, "indistinct chatter": 1.5}
+
+
+def sed_detections(events: List[Dict]) -> List[Dict]:
+    """Sound-event model events as detections for human-tag matching.
+
+    The tag is the AudioSet class name (as YAMNet used), so the existing
+    TAG_MAP of human tag text -> class name matches them.
+    """
+    return [{"start": float(e["start"]), "end": float(e["end"]),
+             "tag": e["label"], "source": "SED", "score": e.get("score")}
+            for e in events]
+
+
+def sed_proposals(events: List[Dict], min_score: float = 0.6,
+                  max_duration: float = MAX_DURATION_MS / 1000.0) -> List[Dict]:
+    """Proposed SDH tags (transcript-free mode) from timed sound events."""
+    out: List[Dict] = []
+    for e in events:
+        tag = SDH_LABELS.get(e.get("label", ""))
+        if not tag or float(e.get("score", 0)) < min_score:
+            continue
+        start, end = float(e["start"]), float(e["end"])
+        if end - start < _MIN_TAG_S.get(tag, 0.4):
+            continue
+        out.append({"start": start, "end": end, "tag": tag, "source": "SED (proposed)"})
+    out.sort(key=lambda x: (x["start"], x["tag"]))
+    # Merge the raw spans first (one music bed is one tag), then cap the
+    # on-screen duration of each merged tag.
+    merged: List[Dict] = []
+    for ev in out:
+        prev = next((m for m in reversed(merged) if m["tag"] == ev["tag"]), None)
+        if prev is not None and ev["start"] - prev["end"] < 1.0:
+            prev["end"] = max(prev["end"], ev["end"])
+        else:
+            merged.append(dict(ev))
+    for ev in merged:
+        ev["end"] = min(ev["end"], ev["start"] + max_duration)
+    return merged
+
+
 def match_human_tags_to_detections(human_text: str,
                                    detected_events: List[Dict]) -> List[Dict]:
     print("\nMatching detected events to transcript tags (1-to-1)...")

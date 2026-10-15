@@ -54,8 +54,9 @@ a = Analysis(
         # Worker scripts invoked by subprocess from qwen/whisperx engines.
         # Not auto-included by Analysis because they are only referenced by
         # file path (Path(__file__).with_name(...)), never imported.
-        ("wordalign/engines/_qwen_worker.py", "wordalign/engines"),
-        ("wordalign/engines/_whisperx_worker.py", "wordalign/engines"),
+        # The robust-flow workers run the same way, in their own venvs.
+        ("wordalign/engines/_*_worker.py", "wordalign/engines"),
+        ("wordalign/engines/_worker.py", "wordalign/engines"),
     ],
     hiddenimports=[
         "srt",
@@ -107,6 +108,29 @@ a = Analysis(
         "wordalign.runtimes",
         "wordalign.runtimes.detector",
         "wordalign.runtimes.manager",
+        # Robust (bad-audio) flow, 2.2
+        "numpy",
+        "onnxruntime",
+        "wordalign.audio",
+        "wordalign.audio.analysis",
+        "wordalign.audio.io",
+        "wordalign.audio.measures",
+        "wordalign.audio.prep",
+        "wordalign.audio.vad",
+        "wordalign.backends",
+        "wordalign.core.robust_stages",
+        "wordalign.doctor",
+        "wordalign.engines.sedicow_engine",
+        "wordalign.engines.voters",
+        "wordalign.gui.review",
+        "wordalign.qa.hallucination",
+        "wordalign.qa.triage",
+        "wordalign.qa.triage_calibration",
+        "wordalign.robustness",
+        "wordalign.robustness.degrade",
+        "wordalign.robustness.metrics",
+        "wordalign.rover",
+        "wordalign.timing",
     ],
     hookspath=[],
     runtime_hooks=['scripts/runtime_hook.py'],

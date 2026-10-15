@@ -5,6 +5,8 @@ srt>=3.5
 librosa>=0.10
 psutil>=5.9
 langdetect>=1.0.9
+numpy>=1.24
+onnxruntime>=1.17         # Silero VAD (audio analysis stage)
 
 # Optional engines (install what you need)
 vosk>=0.3.45                 # lightweight CPU engine / ensemble voter

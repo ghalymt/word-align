@@ -1,5 +1,108 @@
 # Changelog
 
+## 2.2.0 — 2026-10-15
+
+Bad audio. A new **robust flow** (`--profile robust`, GUI preset *Robust*)
+measures the recording, cleans only the parts that need it, lets several
+ASR engines vote, times words with forced alignment on the original audio,
+and sorts every cue into a review queue. Every new stage is optional and
+skipped with a message when its model is not installed. English first;
+see [docs/robust_flow.md](docs/robust_flow.md).
+
+### Upgrade notes (behaviour changes)
+
+- **Word timing uses anchors + forced alignment by default**
+  (`--timing anchor`): agreeing engines give anchors, Qwen3-ForcedAligner
+  (or wav2vec2) aligns the windows between them on the original audio, MFA
+  and pause-aware interpolation fill the rest. `--timing fill_only` brings
+  back the 2.1 waterfall; `--no-forced-align` keeps the engine times.
+- **Every run with anchor timing (the default) writes `<name>_review.json`**
+  (cue tiers Accept / Quick check / Redo with reasons) unless `--no-triage`
+  is given.
+- **The audio analysis stage runs by default** when its model is present
+  (Silero VAD; `--no-vad` turns it off), and the hallucination filter drops
+  engine words the audio does not support (`--no-hallucination-filter`).
+- **Speaker labels use pyannote Community-1** (falls back to 3.1); accept
+  its terms on Hugging Face once.
+- **Transcript-free mode skips Vosk** when two timed voters already anchor
+  the timing and a forced aligner (Qwen3-ForcedAligner or wav2vec2) is
+  installed.
+- The Qwen3-ForcedAligner language list in the model catalog was wrong
+  (it listed Arabic); it now matches the model: zh, en, yue, fr, de, it, ja,
+  ko, pt, ru, es.
+
+### Added
+
+- **Audio analysis:** Silero VAD (ONNX, no torch in the app), VAD-planned
+  ASR chunks, WADA-SNR, narrowband and clipping detection, and timed sound
+  events (PretrainedSED BEATs) per chunk.
+- **Gated cleanup** (`--cleanup auto|all|off`): RoFormer vocal separation for
+  loud music, RoFormer crowd removal, MossFormerGAN for steady noise, mixed
+  into a separate ASR track; never on phone or clipped audio.
+- **ROVER voting** over Cohere Transcribe, Qwen3-ASR, parakeet-ultra,
+  WhisperX and Vosk (`--voters`), per VAD chunk, with each word's agreement
+  and the losing readings kept for review.
+- **Overlap map** (`--overlap-map`) and **overlapped-speech ASR** with
+  SE-DiCoW (`--overlap-asr`); two-speaker **dash cues** (`--dash-cues`,
+  `--dash-style`).
+- **SDH tag proposals** from the sound events (`--tags`).
+- **Review queue in the GUI:** loop a cue, apply a voter's alternative with
+  one click, accept with Ctrl+Enter. Corrections go to
+  `<name>_corrected.srt` (plus an edit log); the pipeline's files are never
+  changed.
+- **Triage calibration:** `wordalign-bench fit-triage --jobs FOLDER` learns
+  the risk weights from your corrected jobs.
+- **Benchmark:** `wordalign-bench` builds a suite from public data
+  (LibriSpeech alignments, MUSAN noise, FMA music) and scores WER, timing,
+  invented words and triage per condition; see
+  [docs/benchmark.md](docs/benchmark.md).
+- **Setup:** `scripts/install_robust.ps1` (venvs and models),
+  `scripts/fetch_models.py` (`--list` shows what is installed),
+  `wordalign --doctor`, `scripts/smoke_robust.py` (one real call per
+  backend).
+- **Configurable locations:** `--models-dir` / `WORDALIGN_MODELS_DIR`,
+  `WORDALIGN_VENVS_DIR`, `WORDALIGN_<NAME>_PYTHON` for every backend,
+  `WORDALIGN_VAD_MODEL`, `WORDALIGN_SED_DIR`.
+- The model catalog lists the new models with their licenses.
+
+### Measured (`wordalign-bench`, quick suite, RTX 4070 Ti)
+
+Five minutes of LibriSpeech speech in nine conditions (clean, noise 5 dB,
+music 0 dB, six-talker babble 0 dB, reverb 1.0 s, μ-law phone, a second
+talker at −5 dB, music only, noise only), every run with an empty cache.
+"2.1" is the 2.1 behaviour run by the 2.2 code
+(`--timing fill_only --no-vad --no-hallucination-filter --no-triage`).
+
+| | 2.1 | 2.2 defaults | `--profile robust` |
+|---|---|---|---|
+| Word-start error, known transcript (mean) | 868 ms | **69 ms** | 70 ms |
+| Words within 100 ms, known transcript | 83.0% | **90.1%** | 90.1% |
+| WER, no transcript | 16.9% | **15.0%** | 15.3% |
+| Word-start error, no transcript (mean) | 225 ms | **73 ms** | 106 ms |
+| Invented words per 10 min of music/noise only | 300 | **0** | **0** |
+| Erroneous cues the review queue flags (no transcript) | – | 88% | 77% |
+| Run time for the 5-minute file | 238–289 s | 234–282 s | 195–268 s |
+
+By condition: reverb WER 43% → 2.6%; babble timing with a known transcript
+5.8 s → 0.2 s. Worse than 2.1: transcript-free WER under 0 dB music with
+sung vocals (0% → 12–13%: the voters also transcribe the lyrics) and under
+0 dB babble (73% → 84–87%, unusable either way). On this synthetic suite the
+robust profile's extra voters and cleanup did not beat the 2.2 defaults;
+whether they help on real recordings with music beds, crowds and crosstalk
+is not measured yet, so compare on your own material (see
+docs/benchmark.md).
+
+### Fixed
+
+- Qwen chunks that ran out of GPU memory are split and retried; pieces that
+  still fail are reported instead of being silently empty.
+- WhisperX finds its venv through the same lookup as the other backends.
+- `--doctor` starts MFA instead of only finding it, so a pip install of MFA
+  without its native `kalpy` module is reported (install MFA from
+  conda-forge).
+- A forced-aligned word no longer vanishes from the word-level SRT when the
+  aligner gives it no length.
+
 ## 2.1.0 — 2026-10-01
 
 New output formats, speaker labels, batch processing, a GUI job queue and

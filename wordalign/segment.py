@@ -766,3 +766,46 @@ def validate_srt_output(entries, name: str) -> Dict[str, int]:
         if count > 0:
             print(f"    - {issue_type}: {count}")
     return issues
+
+
+def merge_dash_cues(segments: List[Dict], overlaps=None, style: str = "-",
+                    max_gap_ms: int = 300) -> List[Dict]:
+    """Join quick two-speaker exchanges into one dash cue (SDH convention).
+
+    Two consecutive cues by different speakers become one cue with one line
+    each, each line led by *style* ("-" per Netflix's English style; "- "
+    for a spaced dash), when they overlap or follow within *max_gap_ms*,
+    each fits on one line, and the joined cue respects the duration limit.
+    Only used when ``--dash-cues`` is set and diarization labelled speakers.
+    """
+    if _max_lines < 2:
+        return segments
+    out: List[Dict] = []
+    i = 0
+    while i < len(segments):
+        a = segments[i]
+        if i + 1 < len(segments):
+            b = segments[i + 1]
+            sa, sb = a.get("speaker"), b.get("speaker")
+            a0, a1 = time_to_ms(a["start"]), time_to_ms(a["end"])
+            b0, b1 = time_to_ms(b["start"]), time_to_ms(b["end"])
+            ta = " ".join(a["text"].split())
+            tb = " ".join(b["text"].split())
+            near = b0 - a1 <= max_gap_ms
+            if overlaps and not near:
+                near = any(os_ * 1000 - max_gap_ms <= b0 <= oe * 1000 + max_gap_ms
+                           for os_, oe in overlaps)
+            fits = (len(style) + len(ta) <= _max_cpl and len(style) + len(tb) <= _max_cpl
+                    and max(a1, b1) - a0 <= _max_duration_ms)
+            if sa and sb and sa != sb and near and fits:
+                out.append({**a, "end": ms_to_time(max(a1, b1)),
+                            "end_source": b.get("end_source"),
+                            "text": f"{style}{ta}\n{style}{tb}",
+                            "speaker": f"{sa} / {sb}", "dash_cue": True})
+                i += 2
+                continue
+        out.append(a)
+        i += 1
+    for k, seg in enumerate(out):
+        seg["index"] = k + 1
+    return out

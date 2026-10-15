@@ -101,12 +101,43 @@ input[type=file]{display:none}
 .output-section .files{display:flex;flex-wrap:wrap;gap:8px}
 .output-section .file{background:var(--navy-bg);padding:8px 14px;border-radius:4px;font-size:12px;color:var(--navy);font-family:var(--mono);word-break:break-all}
 .pref-ok{color:var(--green)}.pref-warn{color:var(--amber)}.pref-err{color:var(--red)}
+/* Review queue */
+#review-section{display:none}
+.rsum{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;font-size:12px}
+.chip{padding:3px 10px;border-radius:10px;font-weight:600}
+.chip.accept{background:var(--green-bg);color:var(--green)}
+.chip.quick{background:var(--amber-bg);color:var(--amber)}
+.chip.redo{background:var(--red-bg);color:var(--red)}
+.chip.info{background:var(--navy-bg);color:var(--navy)}
+.rbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}
+.rbar select{padding:6px 8px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:12px}
+.rbar .hint{font-size:11px;color:var(--t3)}
+.rcue{border:1px solid var(--border);border-left:4px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px;background:var(--surface)}
+.rcue.t-redo{border-left-color:var(--red)}.rcue.t-quick{border-left-color:var(--amber)}.rcue.t-accept{border-left-color:var(--green)}
+.rcue.active{box-shadow:0 0 0 2px var(--navy)}
+.rcue.done{opacity:.6}
+.rhead{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;margin-bottom:6px}
+.rhead .rtime{font-family:var(--mono);color:var(--t2)}
+.rhead .rwhy{color:var(--t2)}
+.rwords{font-size:13px;margin-bottom:6px;line-height:1.9}
+.rwords span{padding:1px 2px;border-radius:3px}
+.rwords .w-dis{background:var(--red-bg);color:var(--red);cursor:help}
+.rwords .w-weak{background:var(--amber-bg);cursor:help}
+.rwords .w-time{border-bottom:2px dotted var(--amber)}
+.rcue textarea{width:100%;min-height:52px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font:13px var(--sans);background:var(--bg);color:var(--text);resize:vertical}
+.ralts{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.ralts button{font-size:11px;padding:2px 8px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);cursor:pointer}
+.ralts button:hover{border-color:var(--navy);color:var(--navy)}
+.racts{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.racts .btn{padding:4px 10px;font-size:12px}
+.racts .state{font-size:11px;color:var(--t3)}
+.rsaved{font-size:12px;color:var(--t2);margin-top:8px;word-break:break-all}
 </style>
 </head>
 <body data-theme="dark">
 
 <header>
-  <h1>🎬 WordAlign 2.0</h1>
+  <h1>🎬 WordAlign <span id="app-version"></span></h1>
   <div class="right">
     <span id="backend-status" class="status status-off">● Backend Offline</span>
     <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">☀ Light</button>
@@ -165,8 +196,11 @@ input[type=file]{display:none}
         <div class="preset-card" data-preset="maximum_quality">
           <div class="pl">Maximum Quality</div><div class="pd">Everything + QA</div><div class="ps">🐌 Slow · Best</div>
         </div>
+        <div class="preset-card" data-preset="robust">
+          <div class="pl">Robust</div><div class="pd">Noise, music, crosstalk</div><div class="ps">🎧 Bad audio · GPU</div>
+        </div>
       </div>
-      <p style="font-size:11px;color:var(--t3);margin-top:8px"><strong>CPU Only</strong> works on any computer. <strong>Fast</strong> and <strong>Balanced</strong> need a GPU for best speed.</p>
+      <p style="font-size:11px;color:var(--t3);margin-top:8px"><strong>CPU Only</strong> works on any computer. <strong>Fast</strong> and <strong>Balanced</strong> need a GPU for best speed. <strong>Robust</strong> measures the audio, cleans the bad parts, lets several engines vote and writes a review queue (step 4); parts that are not installed are skipped.</p>
     </div>
 
     <div class="card">
@@ -299,6 +333,31 @@ input[type=file]{display:none}
     </div>
   </div>
 
+  <!-- STEP 4: Review queue (robust flow) -->
+  <div class="step" id="review-section">
+    <h2><span class="num">4</span> Review</h2>
+    <p class="desc">Cues are sorted by how likely they need a fix. Play a cue on a loop, fix the text,
+      and accept it. Your corrections are saved as a separate <code>_corrected.srt</code>; the original files stay as they are.</p>
+    <div class="card">
+      <div class="rsum" id="review-summary"></div>
+      <div class="rbar">
+        <select id="review-filter" onchange="renderReview()">
+          <option value="todo">To review (Redo + Quick check)</option>
+          <option value="redo">Redo only</option>
+          <option value="all">All cues</option>
+        </select>
+        <select id="review-order" onchange="renderReview()">
+          <option value="time">In time order</option>
+          <option value="risk">Riskiest first</option>
+        </select>
+        <span class="hint">Esc: play / stop the loop · Ctrl+Enter: accept and go to the next cue</span>
+      </div>
+      <audio id="review-audio" preload="auto"></audio>
+      <div id="review-list"></div>
+      <div class="rsaved" id="review-saved"></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -337,7 +396,9 @@ let lastWarningCount = 0;
 let enginesInitialized = false;
 const ACTIVE_JOB_KEY = 'wordalign-active-job';
 const STAGE_LABELS = {init:'Starting',primary:'Transcribing',ensemble:'Transcribing',vosk:'Vosk timing',waterfall:'Timing waterfall',
-  whisperx:'WhisperX timing',qwen:'Qwen timing',mfa:'MFA alignment',interpolation:'Interpolating',segmentation:'Segmenting',qa:'Quality checks',output:'Writing files'};
+  whisperx:'WhisperX timing',qwen:'Qwen timing',mfa:'MFA alignment',interpolation:'Interpolating',segmentation:'Segmenting',qa:'Quality checks',output:'Writing files',
+  analysis:'Measuring the audio',cleanup:'Cleaning noisy parts',diarization:'Speakers and overlaps',voting:'Engines voting',
+  cohere:'Cohere voting',parakeet:'parakeet voting',sedicow:'Overlapped speech',timing:'Forced alignment',triage:'Review queue'};
 
 function getStoredJobId() {
   try { return localStorage.getItem(ACTIVE_JOB_KEY); } catch(e) { return null; }
@@ -406,6 +467,7 @@ function applyPreset(name) {
     fast: ['vosk', 'whisperx'],
     balanced: ['vosk', 'qwen_asr', 'whisperx', 'mfa'],
     maximum_quality: ['vosk', 'qwen_asr', 'whisperx', 'mfa', 'yamnet'],
+    robust: ['vosk', 'qwen_asr', 'whisperx', 'mfa', 'yamnet'],
   }[name] || ['vosk'];
   document.querySelectorAll('[data-engine-id]').forEach(input => {
     const enabled = selected.includes(input.dataset.engineId);
@@ -428,10 +490,10 @@ function getEngineFlags() {
     return flags;
   }
   return {
-    vosk: preset === 'cpu_only' || preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality',
-    qwen: preset === 'balanced' || preset === 'maximum_quality',
-    whisperx: preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality',
-    mfa: preset === 'balanced' || preset === 'maximum_quality',
+    vosk: preset === 'cpu_only' || preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality' || preset === 'robust',
+    qwen: preset === 'balanced' || preset === 'maximum_quality' || preset === 'robust',
+    whisperx: preset === 'fast' || preset === 'balanced' || preset === 'maximum_quality' || preset === 'robust',
+    mfa: preset === 'balanced' || preset === 'maximum_quality' || preset === 'robust',
   };
 }
 
@@ -446,6 +508,7 @@ async function checkBackend() {
   const el = document.getElementById('backend-status');
   el.textContent = backend ? '● Connected' : '● Backend Offline';
   el.className = 'status ' + (backend ? 'status-on' : 'status-off');
+  if (backend && data?.version) document.getElementById('app-version').textContent = data.version;
   if (backend) {
     if (!enginesInitialized) {
       loadEngines();
@@ -585,6 +648,7 @@ function startWatchingJob(jobId, resumed=false) {
       document.getElementById('progress-pct').textContent = '100%';
       appendLog(`DONE: ${job.word_count} words, ${job.segment_count} segments`, 'ok');
       showOutput(job.output_files || []);
+      loadReview(jobId);
       currentJobId = null;
       running = false;
       updateRunBtn();
@@ -640,7 +704,8 @@ async function startPipeline() {
     use_qwen: !!engineFlags.qwen,
     use_whisperx: !!engineFlags.whisperx,
     use_mfa: !!engineFlags.mfa,
-    use_tags: !!engineFlags.yamnet,
+    // Robust tags come from its own sound-event model, not YAMNet.
+    use_tags: !!engineFlags.yamnet || preset === 'robust',
     model_paths: {
       vosk_models_dir: document.getElementById('vosk-models').value || null,
       whisper_models_dir: document.getElementById('whisper-models').value || null,
@@ -700,6 +765,235 @@ function showOutput(files) {
     return item;
   }));
 }
+
+// ==================== REVIEW QUEUE ====================
+const LAST_REVIEW_KEY = 'wordalign-last-review';
+const TIER_CLASS = {accept: 't-accept', quick_check: 't-quick', redo: 't-redo'};
+const TIER_CHIP = {accept: 'accept', quick_check: 'quick', redo: 'redo'};
+let reviewState = null;     // {jobId, review, edits, loopIndex}
+
+function fmtTime(t) {
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = (t % 60).toFixed(1);
+  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + s.padStart(4, '0');
+}
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+async function loadReview(jobId) {
+  const data = await get('/job/' + jobId + '/review');
+  if (!data?.review) return;
+  reviewState = {jobId, review: data.review, edits: data.edits || {}, loopIndex: null,
+                 corrected: data.corrected_path || data.corrected_file, hasAudio: !!data.audio};
+  try { localStorage.setItem(LAST_REVIEW_KEY, jobId); } catch(e) {}
+  const audio = document.getElementById('review-audio');
+  audio.src = data.audio ? API + '/job/' + jobId + '/audio' : '';
+  document.getElementById('review-section').style.display = 'block';
+  renderSummary();
+  renderReview();
+}
+
+function renderSummary() {
+  const sum = reviewState.review.summary || {};
+  const counts = sum.counts || {};
+  const box = document.getElementById('review-summary');
+  const done = Object.keys(reviewState.edits).length;
+  box.replaceChildren(
+    el('span', 'chip redo', `Redo ${counts.redo || 0}`),
+    el('span', 'chip quick', `Quick check ${counts.quick_check || 0}`),
+    el('span', 'chip accept', `Accept ${counts.accept || 0}`),
+    el('span', 'chip info', `${Math.round((sum.share_to_review || 0) * 100)}% of cue time to review`),
+    el('span', 'chip info', `${done} reviewed`));
+  if (!reviewState.hasAudio) box.appendChild(el('span', 'chip quick', 'No review audio'));
+  const saved = document.getElementById('review-saved');
+  saved.textContent = reviewState.corrected ? `Corrections saved to ${reviewState.corrected}` : '';
+}
+
+function visibleCues() {
+  const filter = document.getElementById('review-filter').value;
+  const order = document.getElementById('review-order').value;
+  let cues = (reviewState.review.cues || []).filter(c =>
+    filter === 'all' || (filter === 'redo' ? c.tier === 'redo' : c.tier !== 'accept'));
+  if (order === 'risk') cues = [...cues].sort((a, b) => b.risk - a.risk || a.start - b.start);
+  return cues;
+}
+
+function wordSpans(cue) {
+  const box = el('div', 'rwords');
+  (cue.words || []).forEach((w, k) => {
+    const span = el('span', '', w.word);
+    const tc = w.text_conf ?? 1, tm = w.timing_conf ?? 1;
+    if (tc < 0.6) span.className = 'w-dis';
+    else if (tc < 0.9) span.className = 'w-weak';
+    if (tm < 0.5) span.classList.add('w-time');
+    const alts = w.alternatives ? Object.entries(w.alternatives).filter(([a]) => a !== w.word) : [];
+    const tips = [];
+    if (alts.length) tips.push('Also heard: ' + alts.map(([a, p]) => `${a || '(nothing)'} ${Math.round(p * 100)}%`).join(', '));
+    if (tm < 0.5) tips.push('Timing is a guess');
+    if (tips.length) span.title = tips.join(' · ');
+    box.append(span, document.createTextNode(k < cue.words.length - 1 ? ' ' : ''));
+  });
+  return box;
+}
+
+function replaceWord(textarea, word, alt) {
+  const plain = word.replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}']+$/gu, '');
+  if (!plain) return;
+  const re = new RegExp('(^|[^\\p{L}\\p{N}\'])(' + plain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^\\p{L}\\p{N}\'])', 'iu');
+  const value = textarea.value;
+  const m = re.exec(value);
+  if (!m) return;
+  const at = m.index + m[1].length;
+  let next = value.slice(0, at) + alt + value.slice(at + m[2].length);
+  if (!alt) next = next.replace(/[ \t]{2,}/g, ' ').replace(/ ([,.!?])/g, '$1').trim();
+  textarea.value = next;
+  textarea.dispatchEvent(new Event('input'));
+}
+
+function cueState(cue) {
+  const e = reviewState.edits[String(cue.index)];
+  if (!e) return 'Not reviewed';
+  return e.status === 'edited' ? 'Edited ✓' : 'Accepted ✓';
+}
+
+function renderReview() {
+  if (!reviewState) return;
+  const list = document.getElementById('review-list');
+  const cues = visibleCues();
+  if (!cues.length) {
+    list.replaceChildren(el('p', 'desc', 'Nothing to review with this filter.'));
+    return;
+  }
+  list.replaceChildren(...cues.map(cue => {
+    const item = el('div', 'rcue ' + (TIER_CLASS[cue.tier] || ''));
+    item.dataset.index = cue.index;
+    const edit = reviewState.edits[String(cue.index)];
+    if (edit) item.classList.add('done');
+    const head = el('div', 'rhead');
+    head.append(el('span', 'chip ' + (TIER_CHIP[cue.tier] || 'info'), cue.tier_label || cue.tier),
+                el('span', 'rtime', `#${cue.index} · ${fmtTime(cue.start)} – ${fmtTime(cue.end)}`));
+    if (cue.speaker) head.append(el('span', 'rwhy', cue.speaker));
+    if (cue.reasons?.length) head.append(el('span', 'rwhy', cue.reasons.join(' · ')));
+    const text = document.createElement('textarea');
+    text.value = edit?.status === 'edited' ? edit.text : (cue.text || '');
+    text.dataset.original = cue.text || '';
+    const alts = el('div', 'ralts');
+    (cue.words || []).forEach(w => {
+      Object.entries(w.alternatives || {}).forEach(([alt, p]) => {
+        if (alt === w.word || p < 0.15) return;
+        const b = el('button', '', `${w.word} → ${alt || '(remove)'}`);
+        b.title = `${Math.round(p * 100)}% of the engines' weight`;
+        b.onclick = () => replaceWord(text, w.word, alt);
+        alts.appendChild(b);
+      });
+    });
+    const acts = el('div', 'racts');
+    const play = el('button', 'btn', '▶ Loop');
+    play.onclick = () => toggleLoop(cue, item);
+    const accept = el('button', 'btn btn-primary', '✓ Accept');
+    accept.onclick = () => commitCue(cue, text, item, false);
+    const reset = el('button', 'btn', '↺ Undo');
+    reset.onclick = () => resetCue(cue, text, item);
+    const state = el('span', 'state', cueState(cue));
+    acts.append(play, accept, reset, state);
+    text.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') { ev.preventDefault(); toggleLoop(cue, item); }
+      else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); commitCue(cue, text, item, true); }
+    });
+    text.addEventListener('focus', () => setActive(item));
+    text.addEventListener('input', () => { state.textContent = 'Unsaved changes'; });
+    item.append(head, wordSpans(cue), text);
+    if (alts.childNodes.length) item.append(alts);
+    item.append(acts);
+    return item;
+  }));
+}
+
+function setActive(item) {
+  document.querySelectorAll('.rcue.active').forEach(x => x.classList.remove('active'));
+  item.classList.add('active');
+}
+
+function toggleLoop(cue, item) {
+  const audio = document.getElementById('review-audio');
+  if (!audio.src) return;
+  setActive(item);
+  if (reviewState.loopIndex === cue.index && !audio.paused) {
+    audio.pause();
+    reviewState.loopIndex = null;
+    return;
+  }
+  reviewState.loopIndex = cue.index;
+  reviewState.loopFrom = Math.max(0, cue.start - 0.3);
+  reviewState.loopTo = cue.end + 0.3;
+  audio.currentTime = reviewState.loopFrom;
+  audio.play().catch(() => {});
+}
+
+document.getElementById('review-audio').addEventListener('timeupdate', ev => {
+  const audio = ev.target;
+  if (reviewState?.loopIndex != null && audio.currentTime >= reviewState.loopTo) {
+    audio.currentTime = reviewState.loopFrom;
+  }
+});
+
+async function postEdits(edits) {
+  try {
+    const r = await fetch(API + '/job/' + reviewState.jobId + '/review', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({edits})});
+    const data = await r.json().catch(() => null);
+    if (!r.ok || !data?.ok) throw new Error(data?.error || r.statusText);
+    reviewState.edits = data.edits || reviewState.edits;
+    reviewState.corrected = data.corrected_path || data.corrected_file;
+    renderSummary();
+    return true;
+  } catch (e) {
+    document.getElementById('review-saved').textContent = 'Could not save: ' + e.message;
+    return false;
+  }
+}
+
+async function commitCue(cue, textarea, item, goNext) {
+  const value = textarea.value.replace(/\r\n/g, '\n').trim();
+  const edit = value === (textarea.dataset.original || '').trim()
+    ? {status: 'accepted'} : {status: 'edited', text: value};
+  if (!(await postEdits({[cue.index]: edit}))) return;
+  item.classList.add('done');
+  item.querySelector('.state').textContent = cueState(cue);
+  if (goNext) {
+    const next = item.nextElementSibling;
+    const audio = document.getElementById('review-audio');
+    if (next) {
+      next.querySelector('textarea').focus();
+      next.scrollIntoView({block: 'center', behavior: 'smooth'});
+      if (reviewState.loopIndex != null) {
+        const nextCue = reviewState.review.cues.find(c => String(c.index) === next.dataset.index);
+        if (nextCue) toggleLoop(nextCue, next);
+      }
+    } else if (!audio.paused) {
+      audio.pause();
+      reviewState.loopIndex = null;
+    }
+  }
+}
+
+async function resetCue(cue, textarea, item) {
+  if (!(await postEdits({[cue.index]: null}))) return;
+  textarea.value = textarea.dataset.original || '';
+  item.classList.remove('done');
+  item.querySelector('.state').textContent = cueState(cue);
+}
+
+// Reopen the last review after a page reload.
+(function restoreReview() {
+  let jobId = null;
+  try { jobId = localStorage.getItem(LAST_REVIEW_KEY); } catch(e) {}
+  if (jobId) setTimeout(() => loadReview(jobId), 500);
+})();
 
 // Init
 checkBackend();

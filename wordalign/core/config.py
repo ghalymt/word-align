@@ -45,7 +45,7 @@ class TranscriptionConfig:
 @dataclass
 class TimingConfig:
     """Timing waterfall configuration."""
-    strategy: str = "fill_only"
+    strategy: str = "anchor"         # "anchor" | "fill_only" (v2.1 waterfall)
     order: list[str] = field(default_factory=lambda: [
         "vosk", "rough_srt", "qwen", "whisperx", "mfa", "interpolation"
     ])
@@ -61,6 +61,24 @@ class ExportConfig:
     tags: bool = False
     vtt: bool = False                   # sentence-level WebVTT (.vtt)
     ass: bool = False                   # sentence-level ASS (.ass)
+
+
+@dataclass
+class RobustConfig:
+    """Bad-audio stages (see docs/robust_flow.md). ``None`` = keep the
+    PipelineConfig value (so CLI flags still apply)."""
+    analysis: Optional[bool] = None
+    sound_events: Optional[bool] = None
+    hallucination_filter: Optional[bool] = None
+    cleanup: Optional[str] = None
+    voters: Optional[list] = None
+    voter_priors: Optional[dict] = None     # ROVER weights, e.g. {"whisperx": 0.9}
+    overlap_map: Optional[bool] = None
+    overlap_asr: Optional[bool] = None
+    diarize: Optional[bool] = None
+    dash_cues: Optional[bool] = None
+    forced_align: Optional[bool] = None
+    triage: Optional[bool] = None
 
 
 @dataclass
@@ -82,6 +100,7 @@ class PipelineProfile:
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     qa: QAConfig = field(default_factory=QAConfig)
+    robust: RobustConfig = field(default_factory=RobustConfig)
 
     @classmethod
     def from_dict(cls, d: dict) -> "PipelineProfile":
@@ -91,6 +110,7 @@ class PipelineProfile:
         timing = d.get("timing", {})
         export = d.get("export", {})
         qa = d.get("qa", {})
+        robust = d.get("robust", {}) or {}
         return cls(
             schema_version=d.get("schema_version", 1),
             name=d.get("name", "Default"),
@@ -99,7 +119,7 @@ class PipelineProfile:
             transcription=TranscriptionConfig(
                 engines=trans.get("engines", [])),
             timing=TimingConfig(
-                strategy=timing.get("strategy", "fill_only"),
+                strategy=timing.get("strategy", "anchor"),
                 order=timing.get("order", [
                     "vosk", "rough_srt", "qwen", "whisperx", "mfa", "interpolation"])),
             segmentation=SegmentationConfig(
@@ -118,6 +138,8 @@ class PipelineProfile:
             qa=QAConfig(
                 enabled=qa.get("enabled", False),
                 signals=qa.get("signals", {})),
+            robust=RobustConfig(**{k: robust[k] for k in RobustConfig.__dataclass_fields__
+                                   if k in robust}),
         )
 
     @classmethod
@@ -141,6 +163,7 @@ class PipelineProfile:
                     {"plugin": "vosk", "enabled": True, "weight": 0.55},
                 ]),
                 timing=TimingConfig(order=["vosk", "whisperx", "interpolation"]),
+                robust=RobustConfig(forced_align=False, sound_events=False),
             ),
             "balanced": cls(
                 name="Balanced",
@@ -155,14 +178,35 @@ class PipelineProfile:
             ),
             "maximum_quality": cls(
                 name="Maximum Quality",
-                description="All engines, full waterfall, QA",
+                description="Every installed voter, gated cleanup, overlap "
+                            "map, anchors + forced alignment, QA",
                 qa=QAConfig(enabled=True),
+                robust=RobustConfig(cleanup="auto", overlap_map=True,
+                                    voters=["cohere", "qwen", "parakeet", "whisperx"]),
                 transcription=TranscriptionConfig(engines=[
                     {"plugin": "whisperx", "enabled": True, "model": "large-v3",
                      "weight": 1.0, "backbone": True},
                     {"plugin": "qwen_asr", "enabled": True, "weight": 0.85},
                     {"plugin": "vosk", "enabled": True, "weight": 0.55},
                 ]),
+            ),
+            "robust": cls(
+                name="Robust (bad audio)",
+                description="Gated cleanup, Cohere + Qwen + parakeet + WhisperX "
+                            "voting, overlap map, anchors + forced alignment",
+                qa=QAConfig(enabled=True),
+                transcription=TranscriptionConfig(engines=[
+                    {"plugin": "cohere", "enabled": True, "weight": 1.0},
+                    {"plugin": "qwen_asr", "enabled": True, "weight": 0.95},
+                    {"plugin": "parakeet", "enabled": True, "weight": 0.85},
+                    {"plugin": "whisperx", "enabled": True, "model": "large-v3",
+                     "weight": 0.8},
+                    {"plugin": "vosk", "enabled": True, "weight": 0.4},
+                ]),
+                timing=TimingConfig(strategy="anchor"),
+                robust=RobustConfig(cleanup="auto", overlap_map=True,
+                                    voters=["cohere", "qwen", "parakeet", "whisperx"]),
+                export=ExportConfig(tags=True),
             ),
             "cpu_only": cls(
                 name="CPU Only",
@@ -173,6 +217,7 @@ class PipelineProfile:
                      "backbone": True},
                 ]),
                 timing=TimingConfig(order=["vosk", "interpolation"]),
+                robust=RobustConfig(forced_align=False, sound_events=False),
             ),
         }
         if name not in presets:

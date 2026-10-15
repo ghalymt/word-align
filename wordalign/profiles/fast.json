@@ -1,7 +1,7 @@
 {
     "schema_version": 1,
     "name": "Fast",
-    "description": "Vosk + WhisperX, no MFA. Fastest GPU-assisted path.",
+    "description": "Vosk + WhisperX, anchors without forced alignment. Fastest GPU-assisted path.",
     "mode": "auto",
     "transcription": {
         "engines": [
@@ -9,7 +9,8 @@
             {"plugin": "vosk", "enabled": true, "model": "vosk-model-en-us-0.22", "weight": 0.55}
         ]
     },
-    "timing": {"strategy": "fill_only", "order": ["vosk", "whisperx", "interpolation"]},
+    "timing": {"strategy": "anchor", "order": ["vosk", "whisperx", "interpolation"]},
+    "robust": {"analysis": true, "sound_events": false, "cleanup": "off", "forced_align": false, "triage": true},
     "qa": {"enabled": false},
     "segmentation": {"max_cpl": 42, "max_lines": 2, "max_duration_ms": 7000, "min_cue_ms": 700},
     "export": {"word_srt": true, "sentence_srt": true, "transcript_format": "txt", "transcript_timestamps": true, "tags": false}

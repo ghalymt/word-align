@@ -258,6 +258,39 @@ class PipelineConfig:
     engine_overrides: dict = field(default_factory=dict)
     profile_overrides: dict = field(default_factory=dict)
 
+    # -- Bad-audio robustness (v2.2; see docs/robust_flow.md) --
+    # Stage 1: VAD + SNR/bandwidth/clipping (+ sound events when installed).
+    analysis: bool = True
+    sound_events: bool = True
+    vad_threshold: float = 0.5
+    # Drop engine words the audio does not support (loops, stock phrases
+    # in non-speech, words over silence).
+    hallucination_filter: bool = True
+    # Stage 2: "off", "auto" (gated by the quality map) or "all" (A/B tests).
+    cleanup: str = "off"
+    denoise_mix: float = 0.5
+    # Stage 3: transcript-free voters, e.g. ("cohere", "qwen", "parakeet",
+    # "whisperx"). None -> the enabled whisperx/qwen/vosk engines.
+    voters: Optional[tuple] = None
+    voter_priors: Optional[dict] = None
+    # Stage 4: diarize early for the overlap map (triage, dash cues) ...
+    overlap_map: bool = False
+    # ... and SE-DiCoW on overlapped chunks (transcript-free mode). Words it
+    # adds belong to another speaker, so it turns on speaker labels.
+    overlap_asr: bool = False
+    # Two-speaker cues with leading dashes (SDH convention) for overlaps.
+    dash_cues: bool = False
+    dash_style: str = "-"
+    # Stage 5: "anchor" (anchors + forced alignment) or "fill_only" (the
+    # v2.1 waterfall).
+    timing_strategy: str = "anchor"
+    forced_align: bool = True
+    # Stage 7/8: per-cue risk tiers in <name>_review.json.
+    triage: bool = True
+    # Robust settings given explicitly on the command line; they win over
+    # the profile's ``robust`` section.
+    robust_overrides: dict = field(default_factory=dict)
+
     def vosk_model_path(self, language: str) -> Optional[str]:
         if not self.vosk_models_dir:
             return None
