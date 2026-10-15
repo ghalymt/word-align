@@ -189,6 +189,17 @@ class TestBenchmark(unittest.TestCase):
             scores = runner.evaluate(truth, blocks, hyp, "free")
             self.assertEqual(scores["overall"]["wer"], 0.0)
             self.assertEqual(scores["overall"]["mean_shift_ms"], 0.0)
+            ov = next(b for b in scores["blocks"] if b["condition"] == "overlap_5dB")
+            self.assertEqual(ov["second_talker"]["found"], 1.0)
+            # Not transcribing the second talker is not an error either.
+            only_main = [w for w in hyp if not w.get("interferer")]
+            ov2 = next(b for b in runner.evaluate(truth, blocks, only_main, "free")["blocks"]
+                       if b["condition"] == "overlap_5dB")
+            self.assertEqual((ov2["wer"], ov2["second_talker"]["found"]), (0.0, 0.0))
+            # The reference transcript keeps each utterance on one line.
+            lines = Path(d, "suite", "bench.txt").read_text().splitlines()
+            self.assertEqual(len(lines), len({(w["block"], w["utt"], bool(w.get("interferer")))
+                                              for w in truth}))
             self.assertGreater(scores["overall"]["invented_per_10min"], 0)
             report = {"suite": "x", "variants": {"v2.2": {"free": scores, "flags": []}}}
             md = runner.render_markdown(report)

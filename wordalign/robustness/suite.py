@@ -178,16 +178,14 @@ def build_suite(out_dir: str, sources_dir: str, conditions: Optional[List[str]] 
     write_wav(str(out / "bench.wav"), audio)
     (out / "bench.words.json").write_text(json.dumps(truth), encoding="utf-8")
     (out / "bench.blocks.json").write_text(json.dumps(blocks, indent=1), encoding="utf-8")
-    lines, cur, cur_utt = [], [], None
-    for w in sorted(truth, key=lambda w: w["start"]):
-        key = (w.get("utt"), w.get("block"))
-        if cur and key != cur_utt:
-            lines.append(" ".join(cur))
-            cur = []
-        cur.append(w["word"])
-        cur_utt = key
-    if cur:
-        lines.append(" ".join(cur))
+    # One line per utterance, ordered by when it starts -- the way a human
+    # transcript writes crosstalk: the second talker's line sits between
+    # the main speaker's lines instead of word-by-word interleaving.
+    utts: Dict = {}
+    for w in truth:
+        utts.setdefault((w.get("block"), w.get("utt"), bool(w.get("interferer"))), []).append(w)
+    lines = [" ".join(w["word"] for w in sorted(ws, key=lambda w: w["start"]))
+             for _, ws in sorted(utts.items(), key=lambda kv: min(w["start"] for w in kv[1]))]
     (out / "bench.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     manifest = {"version": 1, "seconds": round(len(audio) / SR, 1), "blocks": len(blocks),
                 "words": len(truth), "conditions": [b["condition"] for b in blocks],

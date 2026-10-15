@@ -32,7 +32,8 @@ Everything is cached under `--dest`; later runs need no network.
 `build` joins one speaker's utterances into a natural passage (0.4–1.2 s
 pauses) for each condition block and degrades it; blocks are separated by
 1 s of silence and written as one long file, so the pipeline sees what it
-sees on a real job. The outputs are `bench.wav`, `bench.txt` (the true
+sees on a real job. In `bench.txt` every utterance is one line, in the order
+the utterances start, as a human transcript writes crosstalk. The outputs are `bench.wav`, `bench.txt` (the true
 transcript, for reference mode), `bench.words.json` (true word times) and
 `bench.blocks.json`.
 
@@ -44,7 +45,7 @@ transcript, for reference mode), `bench.words.json` (true word times) and
 | `babble_5dB`, `babble_0dB` | six other LibriSpeech talkers |
 | `reverb_0.6s`, `reverb_1.0s` | synthetic room reverb (RT60) |
 | `phone_mulaw8k`, `voip_opus12k` | telephone μ-law at 8 kHz; Opus at 12 kbit/s |
-| `overlap_5dB`, `overlap_0dB` | a second speaker talking over (their words are marked) |
+| `overlap_5dB`, `overlap_0dB` | a second speaker talking over; their words are scored separately |
 | `clipped` | 12 dB of gain, hard-clipped at the original peak |
 | `only_music`, `only_noise`, `only_babble`, `silence` | no speech at all: every word written there is invented |
 
@@ -71,8 +72,8 @@ honest; without it later variants reuse earlier engine output.
 
 | Metric | Meaning |
 |---|---|
-| WER | word error rate of the speech blocks (free mode), after lower-casing and stripping punctuation |
-| Mean shift | mean distance between a word's true start and its output start, over matched words (ms) |
+| WER | word error rate of the main speaker in the speech blocks (free mode), after lower-casing and stripping punctuation; words that belong to a second talker are neither errors nor required |
+| Mean shift | mean distance between a main-speaker word's true start and its output start, over matched words (ms) |
 | Within 100 ms | share of matched words that start within 100 ms of the truth |
 | Invented words / 10 min | words written in the no-speech blocks, per 10 minutes of no-speech audio (free mode) |
 | Triage recall | of the cues that contain an error, the share the review queue flagged (*Quick check* or *Redo*) |
@@ -80,7 +81,8 @@ honest; without it later variants reuse earlier engine output.
 | Run time | wall-clock seconds for the whole file |
 
 `report.md` has the overall table, then per-condition tables for WER and
-timing, and the invented words per no-speech block. `report.json` holds
+timing, the second talker in overlap blocks (share of their words found,
+and their timing), and the invented words per no-speech block. `report.json` holds
 everything, including each run's per-stage seconds; each run's own log and
 output files are under `<out>/<variant>/<mode>/`.
 

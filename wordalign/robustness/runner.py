@@ -54,7 +54,12 @@ def evaluate(truth: Sequence[Dict], blocks: Sequence[Dict], hyp: Sequence[Dict],
     per_block = []
     nonspeech_s, invented = 0.0, 0
     for b in blocks:
-        bt = [w for w in truth if w.get("block") == b["id"]]
+        block_truth = [w for w in truth if w.get("block") == b["id"]]
+        # The main speaker is scored; a second talker (overlap blocks) is
+        # measured on its own, so transcribing them is neither an error nor
+        # required.
+        bt = [w for w in block_truth if not w.get("interferer")]
+        bi = [w for w in block_truth if w.get("interferer")]
         # Hypothesis words up to 0.5 s outside a block still belong to it
         # (the 1 s gaps between blocks are silence).
         bh = _words_in(hyp, b["start"] - 0.5, b["end"] + 0.5)
@@ -64,12 +69,17 @@ def evaluate(truth: Sequence[Dict], blocks: Sequence[Dict], hyp: Sequence[Dict],
             invented += len(bh)
             row["invented_words"] = len(bh)
         else:
+            main_hyp = bh
+            if bi:
+                found, main_hyp = _split_second_talker(bt, bi, bh)
+                row["second_talker"] = {"words": len(bi), "found": found,
+                                        **metrics.timing_errors(bi, bh)}
             if mode == "free":
                 row.update({k: v for k, v in metrics.wer(
                     " ".join(w["word"] for w in bt),
-                    " ".join(w["word"] for w in bh)).items()
+                    " ".join(w["word"] for w in main_hyp)).items()
                     if k in ("wer", "substitutions", "deletions", "insertions", "reference")})
-            row.update(metrics.timing_errors(bt, bh))
+            row.update(metrics.timing_errors(bt, main_hyp))
         per_block.append(row)
     speech_rows = [r for r in per_block if r["kind"] == "speech"]
     overall: Dict = {}
@@ -89,6 +99,41 @@ def evaluate(truth: Sequence[Dict], blocks: Sequence[Dict], hyp: Sequence[Dict],
     if review:
         overall["triage"] = metrics.triage_scores(review, truth, hyp, timed_truth=True)
     return {"overall": overall, "blocks": per_block}
+
+
+def _split_second_talker(main: Sequence[Dict], second: Sequence[Dict],
+                         hyp: Sequence[Dict]):
+    """(share of the second talker's words found, hypothesis without them).
+
+    Hypothesis words not matched to the main speaker that carry the same
+    text as one of the second talker's words, within 1.5 s of it, are
+    theirs (overlapping talkers interleave word by word, so runs of matches
+    cannot be relied on).
+    """
+    from difflib import SequenceMatcher
+
+    def norm(w):
+        return " ".join(metrics.normalize_text(w["word"]))
+
+    m_norm, s_norm, h_norm = [norm(w) for w in main], [norm(w) for w in second], \
+        [norm(w) for w in hyp]
+    sm = SequenceMatcher(None, m_norm, h_norm, autojunk=False)
+    mains = set()
+    for blk in sm.get_matching_blocks():
+        mains.update(range(blk.b, blk.b + blk.size))
+    used = [False] * len(second)
+    theirs = set()
+    for k, w in enumerate(hyp):
+        if k in mains or not h_norm[k] or w.get("start") is None:
+            continue
+        for j, sw in enumerate(second):
+            if (not used[j] and s_norm[j] == h_norm[k]
+                    and abs(float(sw["start"]) - float(w["start"])) <= 1.5):
+                used[j] = True
+                theirs.add(k)
+                break
+    found = round(len(theirs) / max(1, len(second)), 3)
+    return found, [w for k, w in enumerate(hyp) if k not in theirs]
 
 
 def _hyp_words(result) -> List[Dict]:
@@ -229,6 +274,21 @@ def render_markdown(report: Dict) -> str:
                   "|---|" + "---|" * len(names)]
         for cond, vals in rows.items():
             lines.append(f"| {cond} | " + " | ".join(_fmt(vals.get(n), pct) for n in names) + " |")
+    rows = {}
+    for name in names:
+        for mode in MODES:
+            r = variants[name].get(mode) or {}
+            for b in r.get("blocks", []):
+                st = b.get("second_talker")
+                if st:
+                    rows.setdefault(f"{b['condition']} ({mode})", {})[name] = (
+                        f"{st['found'] * 100:.0f}% found, "
+                        + (f"{st['mean_ms']:.0f} ms" if st.get("mean_ms") is not None else "–"))
+    if rows:
+        lines += ["", "## Second talker in overlap blocks (not scored above)", "",
+                  "| Block | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
+        for cond, vals in rows.items():
+            lines.append(f"| {cond} | " + " | ".join(str(vals.get(n, "–")) for n in names) + " |")
     rows = {}
     for name in names:
         r = variants[name].get("free") or {}
