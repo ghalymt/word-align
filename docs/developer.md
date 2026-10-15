@@ -232,6 +232,64 @@ class FakePlugin(EnginePlugin):
 
 ---
 
+## Robust flow internals (2.2)
+
+The bad-audio stages ([robust_flow.md](robust_flow.md)) live in
+`core/robust_stages.py` as `RobustStagesMixin`, which `PipelineRunner`
+mixes in. `PipelineRunner.run()` calls them in order:
+
+```text
+_analysis_stage   -> self._qmap (audio.analysis.QualityMap; cached)
+_diarize_early    -> self._turns, overlaps into the quality map
+_cleanup_stage    -> self._asr_audio (+ self._cleanup_signature for cache keys)
+_run_primary_transcript
+    transcript-free: _run_voting -> ROVER per VAD chunk (rover.vote)
+                     (+ _overlap_asr with SE-DiCoW)
+    reference:       _reference_sources -> timed engine words
+_timing_anchor    -> timing.run_anchor_alignment(words, sources, aligner=...)
+segmentation, outputs, _write_sed_tags, _write_triage (qa.triage)
+```
+
+Every stage checks its own setting (`PipelineConfig` fields, which a
+profile's `"robust"` block fills unless a CLI flag set them; see
+`_ROBUST_FIELDS` in `core/pipeline.py`) and returns quietly when its model
+is missing.
+
+**Out-of-process workers.** Each heavy model runs in its own venv through
+`engines/_worker.run_worker(python, worker_script, args, sentinel)`. A
+worker is a self-contained script (standard library imports at the top, the
+model's imports inside `main`) that prints exactly one line
+`<SENTINEL>{json}` on stdout; everything else (progress, warnings) goes to
+stderr. `backends.backend_python(name)` finds the interpreter
+(`WORDALIGN_<NAME>_PYTHON`, then `WORDALIGN_VENVS_DIR/<name>`, the bundle's
+`venvs/`, `<project>/venvs`). Cancellation terminates the worker.
+
+**Adding a voter.** Write `_<name>_worker.py` (input: audio path + a JSON
+file of `[start, end]` chunks; output: per-chunk text or timed words), add a
+`run_<name>` wrapper and its language set in `engines/voters.py`, the name
+to `VOTER_SOURCE_NAMES` (`core/robust_stages.py`) and `DEFAULT_PRIORS` (`rover.py`), and to the
+`--voters` choices in `cli_v2.py`. Text-only voters vote on words; timed
+voters also become timing sources for the anchors.
+
+**Caching.** Engine outputs go through `_cached_engine(plugin, model,
+language, settings, loader)`. Settings must include everything that changes
+the output: the chunk plan hash and the `asr_audio` signature for ASR, the
+model availability for the analysis map. Failed, partial or cancelled
+results are never cached.
+
+**Review files.** `qa/triage.py` scores cues (logistic weights in
+`DEFAULT_WEIGHTS`, overridden by `~/.wordalign/triage_weights.json`) and
+writes `<name>_review.json`; `gui/review.py` serves it to the GUI and writes
+`<name>_corrected.srt`; `qa/triage_calibration.py` fits the weights from
+corrected jobs.
+
+**Tests.** `tests/test_robust_*.py` and `tests/test_gui_review.py` run
+without any model: engines are replaced by recorded or fake outputs. On a
+machine with the backends, `scripts/smoke_robust.py clip.wav [--only a,b]`
+calls each backend once for real and prints OK/FAIL per step.
+
+---
+
 ## File Reference
 
 | Path | Purpose |
@@ -260,3 +318,15 @@ class FakePlugin(EnginePlugin):
 | `wordalign/profiles/*.json` | Pipeline profile presets |
 | `wordalign/data/model_catalog.json` | Curated model catalog |
 | `wordalign/gui/app.html` | Web-based GUI application |
+| `wordalign/core/robust_stages.py` | Robust-flow stages (analysis, cleanup, voting, timing, triage) |
+| `wordalign/audio/` | Audio I/O, Silero VAD, SNR / narrowband / clipping measures, quality map, cleanup |
+| `wordalign/timing.py` | Anchors, forced-alignment windows, interpolation |
+| `wordalign/rover.py` | ROVER word voting |
+| `wordalign/backends.py` | Backend venv discovery |
+| `wordalign/engines/voters.py` | Cohere / parakeet chunk voters |
+| `wordalign/engines/_*_worker.py` | Out-of-process model workers |
+| `wordalign/qa/hallucination.py` | Hallucination filter |
+| `wordalign/qa/triage.py`, `triage_calibration.py` | Review tiers and weight fitting |
+| `wordalign/gui/review.py` | GUI review queue: edits, corrected SRT, review audio |
+| `wordalign/robustness/` | `wordalign-bench`: data sources, suite builder, runner, metrics |
+| `scripts/install_robust.ps1`, `scripts/fetch_models.py` | Robust-flow venvs and models |

@@ -79,6 +79,15 @@ def copy_extra_files(dist_dir: Path, include_models: bool = True,
     for doc in (ROOT / "docs").glob("*.md"):
         shutil.copy2(doc, docs_dir / doc.name)
 
+    # The robust-flow installer and model fetcher, so a portable install
+    # can add the bad-audio backends later.
+    scripts_dir = target / "scripts"
+    scripts_dir.mkdir(exist_ok=True)
+    for name in ("install_robust.ps1", "fetch_models.py"):
+        src = ROOT / "scripts" / name
+        if src.exists():
+            shutil.copy2(src, scripts_dir / name)
+
     launcher_src = ROOT / "scripts" / "Launch WordAlign.vbs"
     if launcher_src.exists():
         shutil.copy2(launcher_src, target / "Launch WordAlign.vbs")
@@ -148,6 +157,15 @@ models\\ folder next to WordAlign.exe:
   models\\mfa\\         Montreal Forced Aligner models
                         (mfa model download acoustic|g2p <name>)
   models\\llm\\         GGUF model for smart punctuation (optional)
+
+Robust (bad-audio) flow, optional -- see docs\\robust_flow.md:
+  models\\vad\\         Silero VAD (silero_vad.onnx)
+  models\\sed\\         PretrainedSED sound-event model
+  models\\denoise\\     MossFormerGAN speech enhancement
+  models\\huggingface\\ Cohere Transcribe, parakeet-ultra, pyannote, SE-DiCoW
+  venvs\\             their Python environments
+scripts\\install_robust.ps1 installs all of these (it needs Python 3.10+ on
+PATH); "WordAlign.exe --doctor" shows what was found.
 
 Start WordAlign and open Settings -> Model Paths: it shows which models it
 found, and every path can point somewhere else (for example a shared drive).

@@ -52,6 +52,14 @@ class TestScoring(unittest.TestCase):
         self.assertEqual(tier, REDO)
         self.assertTrue(any("no engine heard" in r for r in reasons))
 
+    def test_reference_mode_one_unheard_name_is_a_check(self):
+        ws = words(3)
+        ws[1]["heard_by"] = 0                         # "I'm Mohamed Ghali."
+        tier, _, est, reasons, _ = score_cue(ws, [], 0, "reference")
+        self.assertEqual(tier, QUICK)
+        self.assertLess(est, 0.3)
+        self.assertTrue(any("no engine heard 1 word" in r for r in reasons))
+
     def test_interpolated_words_are_reported(self):
         ws = words(6)
         for w in ws[2:4]:

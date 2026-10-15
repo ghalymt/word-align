@@ -44,7 +44,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($Bundle)) { $Bundle = Join-Path $root "dist\WordAlign" }
+if ([string]::IsNullOrWhiteSpace($Bundle)) {
+    # Run from a portable bundle (<bundle>\scripts\) or from the source tree.
+    $Bundle = if (Test-Path -LiteralPath (Join-Path $root "WordAlign.exe")) { $root } else { Join-Path $root "dist\WordAlign" }
+}
 if ([string]::IsNullOrWhiteSpace($VenvRoot)) { $VenvRoot = Join-Path $Bundle "venvs" }
 if ([string]::IsNullOrWhiteSpace($Models)) { $Models = Join-Path $root "models" }
 if ([string]::IsNullOrWhiteSpace($Py)) {

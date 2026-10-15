@@ -42,6 +42,7 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "weak_timing_any": 1.5,   # at least one such word
     "interpolated": 3.0,      # share of words interpolated
     "unheard": 2.5,           # reference words no engine heard
+    "unheard_any": 2.4,       # at least one such word (often a name): worth a look
     "overlap": 1.4,
     "music": 0.7,
     "crowd": 0.7,
@@ -116,6 +117,7 @@ def cue_features(words: Sequence[Dict], conditions: Iterable[str],
     timing_conf = [float(w.get("timing_conf", 0.75)) for w in words]
     low_text = sum(1 for c in text_conf if c < 0.6)
     weak = sum(1 for c in timing_conf if c < 0.5)
+    unheard = sum(1 for w in words if w.get("heard_by", 1) == 0)
     feats: Dict[str, float] = {
         "text_error": sum(1.0 - c for c in text_conf) / n,
         "low_text": low_text / n,
@@ -123,8 +125,8 @@ def cue_features(words: Sequence[Dict], conditions: Iterable[str],
         "weak_timing": weak / n,
         "weak_timing_any": 1.0 if weak else 0.0,
         "interpolated": sum(1 for w in words if w.get("interpolated")) / n,
-        "unheard": (sum(1 for w in words if w.get("heard_by", 1) == 0) / n
-                    if mode == "reference" else 0.0),
+        "unheard": (unheard / n if mode == "reference" else 0.0),
+        "unheard_any": 1.0 if mode == "reference" and unheard else 0.0,
         "hallucination": min(1.0, removed / 3.0),
         "implausible": sum(
             1 for w in words if w.get("start") is not None and w.get("end") is not None
@@ -177,8 +179,14 @@ def score_cue(words: Sequence[Dict], conditions: Iterable[str], removed: int = 0
     feats = cue_features(words, conditions, removed, mode)
     z = w.get("bias", 0.0) + sum(w.get(k, 0.0) * v for k, v in feats.items())
     risk = _sigmoid(z)
-    est_error = min(1.0, feats["text_error"] * 1.25 + 0.5 * feats["unheard"]) \
-        if mode == "ensemble" else min(1.0, feats["unheard"])
+    if mode == "ensemble":
+        est_error = min(1.0, feats["text_error"] * 1.25 + 0.5 * feats["unheard"])
+    else:
+        # Reference mode: the words are the transcript's. One word no engine
+        # heard is usually a name or a rare word -- check it, do not retype
+        # the cue -- so the first unheard word does not count towards Redo.
+        n = max(1, len(words))
+        est_error = min(1.0, max(0.0, feats["unheard"] - 1.0 / n))
     # Risk decides whether a cue needs a look; the predicted error share
     # decides whether editing still beats retyping (Gaur et al.: ~30%).
     if est_error >= REDO_ERROR_SHARE:

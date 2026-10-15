@@ -1,5 +1,74 @@
 # Changelog
 
+## 2.2.0 — 2026-10-15
+
+Bad audio. A new **robust flow** (`--profile robust`, GUI preset *Robust*)
+measures the recording, cleans only the parts that need it, lets several
+ASR engines vote, times words with forced alignment on the original audio,
+and sorts every cue into a review queue. Every new stage is optional and
+skipped with a message when its model is not installed. English first;
+see [docs/robust_flow.md](docs/robust_flow.md).
+
+### Upgrade notes (behaviour changes)
+
+- **Word timing uses anchors + forced alignment by default**
+  (`--timing anchor`): agreeing engines give anchors, Qwen3-ForcedAligner
+  (or wav2vec2) aligns the windows between them on the original audio, MFA
+  and pause-aware interpolation fill the rest. `--timing fill_only` brings
+  back the 2.1 waterfall; `--no-forced-align` keeps the engine times.
+- **Every run writes `<name>_review.json`** (cue tiers Accept / Quick check /
+  Redo with reasons) unless `--no-triage` is given.
+- **The audio analysis stage runs by default** when its model is present
+  (Silero VAD; `--no-vad` turns it off), and the hallucination filter drops
+  engine words the audio does not support (`--no-hallucination-filter`).
+- **Speaker labels use pyannote Community-1** (falls back to 3.1); accept
+  its terms on Hugging Face once.
+- **Transcript-free mode skips Vosk** when two timed voters and the forced
+  aligner are available.
+- The Qwen3-ForcedAligner language list in the model catalog was wrong
+  (it listed Arabic); it now matches the model: zh, en, yue, fr, de, it, ja,
+  ko, pt, ru, es.
+
+### Added
+
+- **Audio analysis:** Silero VAD (ONNX, no torch in the app), VAD-planned
+  ASR chunks, WADA-SNR, narrowband and clipping detection, and timed sound
+  events (PretrainedSED BEATs) per chunk.
+- **Gated cleanup** (`--cleanup auto|all|off`): RoFormer vocal separation for
+  loud music, RoFormer crowd removal, MossFormerGAN for steady noise, mixed
+  into a separate ASR track; never on phone or clipped audio.
+- **ROVER voting** over Cohere Transcribe, Qwen3-ASR, parakeet-ultra,
+  WhisperX and Vosk (`--voters`), per VAD chunk, with each word's agreement
+  and the losing readings kept for review.
+- **Overlap map** (`--overlap-map`) and **overlapped-speech ASR** with
+  SE-DiCoW (`--overlap-asr`); two-speaker **dash cues** (`--dash-cues`,
+  `--dash-style`).
+- **SDH tag proposals** from the sound events (`--tags`).
+- **Review queue in the GUI:** loop a cue, apply a voter's alternative with
+  one click, accept with Ctrl+Enter. Corrections go to
+  `<name>_corrected.srt` (plus an edit log); the pipeline's files are never
+  changed.
+- **Triage calibration:** `wordalign-bench fit-triage --jobs FOLDER` learns
+  the risk weights from your corrected jobs.
+- **Benchmark:** `wordalign-bench` builds a suite from public data
+  (LibriSpeech alignments, MUSAN noise, FMA music) and scores WER, timing,
+  invented words and triage per condition; see
+  [docs/benchmark.md](docs/benchmark.md).
+- **Setup:** `scripts/install_robust.ps1` (venvs and models),
+  `scripts/fetch_models.py` (`--list` shows what is installed),
+  `wordalign --doctor`, `scripts/smoke_robust.py` (one real call per
+  backend).
+- **Configurable locations:** `--models-dir` / `WORDALIGN_MODELS_DIR`,
+  `WORDALIGN_VENVS_DIR`, `WORDALIGN_<NAME>_PYTHON` for every backend,
+  `WORDALIGN_VAD_MODEL`, `WORDALIGN_SED_DIR`.
+- The model catalog lists the new models with their licenses.
+
+### Fixed
+
+- Qwen chunks that ran out of GPU memory are split and retried; pieces that
+  still fail are reported instead of being silently empty.
+- WhisperX finds its venv through the same lookup as the other backends.
+
 ## 2.1.0 — 2026-10-01
 
 New output formats, speaker labels, batch processing, a GUI job queue and
