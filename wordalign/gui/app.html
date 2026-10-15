@@ -704,7 +704,8 @@ async function startPipeline() {
     use_qwen: !!engineFlags.qwen,
     use_whisperx: !!engineFlags.whisperx,
     use_mfa: !!engineFlags.mfa,
-    use_tags: !!engineFlags.yamnet,
+    // Robust tags come from its own sound-event model, not YAMNet.
+    use_tags: !!engineFlags.yamnet || preset === 'robust',
     model_paths: {
       vosk_models_dir: document.getElementById('vosk-models').value || null,
       whisper_models_dir: document.getElementById('whisper-models').value || null,
