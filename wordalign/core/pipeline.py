@@ -79,6 +79,9 @@ class PipelineRunner(RobustStagesMixin):
         self._errors: List[str] = []
         self._primary_attempted: set = set()
         self._apply_profile()
+        # Words SE-DiCoW adds belong to another speaker: label speakers.
+        if self.config.overlap_asr:
+            self.config.diarize = True
 
     def _profile_for_config(self, cfg: PipelineConfig) -> PipelineProfile:
         if cfg.profile_name:
@@ -140,8 +143,8 @@ class PipelineRunner(RobustStagesMixin):
                 self.config.use_mfa = bool(value)
 
     _ROBUST_FIELDS = ("analysis", "sound_events", "hallucination_filter",
-                      "cleanup", "overlap_asr", "dash_cues", "forced_align",
-                      "triage")
+                      "cleanup", "overlap_map", "overlap_asr", "dash_cues",
+                      "forced_align", "triage")
 
     def _apply_robust_profile(self) -> None:
         """Profile robust settings, then explicit CLI flags on top."""
@@ -399,6 +402,7 @@ class PipelineRunner(RobustStagesMixin):
         anchor_mode = cfg.timing_strategy != "fill_only" and not legacy_mode
         timed_sources: Dict[str, List[Dict]] = {}
         self._qmap = None
+        self._vote_chunks = None
         self._removals = []
         self._asr_audio = cfg.audio_path
         self._turns = None
@@ -926,6 +930,7 @@ class PipelineRunner(RobustStagesMixin):
             result.statistics["analysis"] = self._qmap.summary()
         if self._removals:
             result.statistics["hallucinations_removed"] = len(self._removals)
+        result.statistics["stage_seconds"] = dict(self._stage_durations)
         result.aligned_words = dicts_to_words(aligned_words, 0)
         result.consensus = dicts_to_words(ensemble_conf) if ensemble_conf else None
         source_counts: Dict[str, int] = {}

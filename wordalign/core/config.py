@@ -72,6 +72,7 @@ class RobustConfig:
     hallucination_filter: Optional[bool] = None
     cleanup: Optional[str] = None
     voters: Optional[list] = None
+    overlap_map: Optional[bool] = None
     overlap_asr: Optional[bool] = None
     diarize: Optional[bool] = None
     dash_cues: Optional[bool] = None
@@ -177,9 +178,9 @@ class PipelineProfile:
             "maximum_quality": cls(
                 name="Maximum Quality",
                 description="Every installed voter, gated cleanup, overlap "
-                            "handling, anchors + forced alignment, QA",
+                            "map, anchors + forced alignment, QA",
                 qa=QAConfig(enabled=True),
-                robust=RobustConfig(cleanup="auto", overlap_asr=True,
+                robust=RobustConfig(cleanup="auto", overlap_map=True,
                                     voters=["cohere", "qwen", "parakeet", "whisperx"]),
                 transcription=TranscriptionConfig(engines=[
                     {"plugin": "whisperx", "enabled": True, "model": "large-v3",
@@ -191,7 +192,7 @@ class PipelineProfile:
             "robust": cls(
                 name="Robust (bad audio)",
                 description="Gated cleanup, Cohere + Qwen + parakeet + WhisperX "
-                            "voting, overlap handling, anchors + forced alignment",
+                            "voting, overlap map, anchors + forced alignment",
                 qa=QAConfig(enabled=True),
                 transcription=TranscriptionConfig(engines=[
                     {"plugin": "cohere", "enabled": True, "weight": 1.0},
@@ -202,7 +203,7 @@ class PipelineProfile:
                     {"plugin": "vosk", "enabled": True, "weight": 0.4},
                 ]),
                 timing=TimingConfig(strategy="anchor"),
-                robust=RobustConfig(cleanup="auto", overlap_asr=True,
+                robust=RobustConfig(cleanup="auto", overlap_map=True,
                                     voters=["cohere", "qwen", "parakeet", "whisperx"]),
                 export=ExportConfig(tags=True),
             ),

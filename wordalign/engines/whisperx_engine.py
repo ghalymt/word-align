@@ -103,6 +103,9 @@ def run_whisperx(audio_path: str,
         return [], []
 
     whisperx_python = os.environ.get("WORDALIGN_WHISPERX_PYTHON")
+    if not whisperx_python:
+        from ..backends import backend_python
+        whisperx_python = backend_python("whisperx")
     models_dir = models_dir or os.environ.get("WORDALIGN_WHISPERX_MODELS")
 
     if not whisperx_python:

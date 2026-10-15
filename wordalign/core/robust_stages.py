@@ -163,7 +163,7 @@ class RobustStagesMixin:
         """Run diarization before ASR when overlaps matter; returns turns."""
         cfg = self.config
         self._turns = None
-        if not (cfg.diarize or cfg.overlap_asr):
+        if not (cfg.diarize or cfg.overlap_asr or cfg.overlap_map):
             return None
         from ..diarize import DiarizationUnavailable, diarize_turns, overlap_regions
         self._emit(StageStarted(stage="diarization", message="Detecting speakers and overlaps"))
@@ -324,6 +324,7 @@ class RobustStagesMixin:
         else:
             chunk_capable = True
         n = len(chunks)
+        self._vote_chunks = list(chunks)
         per_engine: Dict[str, Dict[int, List[Dict]]] = {}
         timed_sources: Dict[str, List[Dict]] = {}
         wx_events: List[Dict] = []
@@ -465,7 +466,7 @@ class RobustStagesMixin:
             for k in range(block.size):
                 src = voted[block.b + k]
                 dst = aligned_words[block.a + k]
-                for key in ("text_conf", "voters", "alternatives", "speaker"):
+                for key in ("text_conf", "voters", "alternatives", "speaker", "chunk"):
                     if key in src:
                         dst[key] = src[key]
 
@@ -609,10 +610,16 @@ class RobustStagesMixin:
         retry = None
         if aligner is not None and getattr(self, "_asr_audio", cfg.audio_path) != cfg.audio_path:
             retry, _ = self._forced_aligner(language, self._asr_audio)
+        windows = None
+        vote_chunks = getattr(self, "_vote_chunks", None)
+        if (aligner is not None and not cfg.transcript_path and vote_chunks
+                and any(w.get("chunk") is not None for w in aligned_words)):
+            from ..timing import windows_from_chunks
+            windows = windows_from_chunks(aligned_words, vote_chunks) or None
         stats = run_anchor_alignment(aligned_words, sources, duration or 0.0,
                                      aligner=aligner, retry_aligner=retry,
                                      aligner_name=name or "aligner",
-                                     first_speech=first_speech,
+                                     first_speech=first_speech, windows=windows,
                                      log=lambda m: self._msg("timing", m))
         # "Heard by": how many engines matched each word (reference cross-check).
         from ..timing import match_source

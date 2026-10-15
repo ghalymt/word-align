@@ -12,6 +12,8 @@ license = {file = "LICENSE"}
 dependencies = [
     "langdetect>=1.0.9",
     "librosa>=0.10",
+    "numpy>=1.24",
+    "onnxruntime>=1.17",
     "psutil>=5.9",
     "srt>=3.5",
     "vosk>=0.3.45",
@@ -27,9 +29,12 @@ mfa = ["montreal-forced-aligner>=3.4", "textgrid>=1.5"]
 llm = ["transformers>=4.40"]
 docx = ["python-docx>=1.1"]
 dev = ["pytest>=7.4"]
+# Bad-audio benchmark (wordalign-bench): public datasets via the HF hub.
+bench = ["huggingface_hub>=0.24", "pyarrow>=14", "soundfile>=0.12"]
 
 [project.scripts]
 wordalign = "wordalign.cli_v2:main"
+wordalign-bench = "wordalign.robustness.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["wordalign*"]

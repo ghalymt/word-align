@@ -21,6 +21,12 @@ def _candidate_env_roots() -> List[Path]:
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
         roots.append(Path(conda_prefix))
+    # The bundled MFA env (scripts/build_backends.ps1): <venvs>/mfa.
+    try:
+        from ..backends import venv_roots
+        roots.extend(r / "mfa" for r in venv_roots())
+    except Exception:
+        pass
     home = Path.home()
     for base in (home / ".conda" / "envs", home / "miniconda3" / "envs",
                  home / "anaconda3" / "envs"):

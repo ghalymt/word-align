@@ -1,7 +1,7 @@
 {
     "schema_version": 1,
     "name": "Robust",
-    "description": "For bad audio: gated cleanup (music/crowd separation, partial denoising), Cohere + Qwen + parakeet + WhisperX voting, overlap handling, anchors + forced alignment on the original audio, review triage.",
+    "description": "For bad audio: gated cleanup (music/crowd separation, partial denoising), Cohere + Qwen + parakeet + WhisperX voting, an overlap map from diarization, anchors + forced alignment on the original audio, review triage.",
     "mode": "auto",
     "transcription": {
         "engines": [
@@ -61,9 +61,9 @@
             "parakeet",
             "whisperx"
         ],
-        "overlap_asr": true,
         "forced_align": true,
-        "triage": true
+        "triage": true,
+        "overlap_map": true
     },
     "qa": {
         "enabled": true,

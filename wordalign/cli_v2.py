@@ -150,9 +150,12 @@ def _parse_args(argv=None) -> PipelineConfig:
     robust.add_argument("--voters", default=None, metavar="LIST",
                         help="transcript-free voters, comma-separated: cohere, "
                              "qwen, parakeet, whisperx, vosk")
+    robust.add_argument("--overlap-map", action="store_true", default=None,
+                        help="diarize first to map overlapping speech (raises "
+                             "the review risk of those cues; robust profile)")
     robust.add_argument("--overlap-asr", action="store_true", default=None,
                         help="transcribe overlapped speech per speaker with "
-                             "SE-DiCoW (transcript-free mode)")
+                             "SE-DiCoW (transcript-free mode; implies --diarize)")
     robust.add_argument("--dash-cues", action="store_true", default=None,
                         help="join quick two-speaker exchanges into dash cues "
                              "(needs --diarize)")
@@ -304,8 +307,8 @@ def _parse_args(argv=None) -> PipelineConfig:
 
     robust_overrides = {}
     for name in ("analysis", "sound_events", "hallucination_filter", "cleanup",
-                 "overlap_asr", "dash_cues", "dash_style", "timing_strategy",
-                 "forced_align", "triage"):
+                 "overlap_map", "overlap_asr", "dash_cues", "dash_style",
+                 "timing_strategy", "forced_align", "triage"):
         value = getattr(a, name)
         if value is not None:
             robust_overrides[name] = value

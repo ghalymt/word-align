@@ -273,7 +273,10 @@ class PipelineConfig:
     # "whisperx"). None -> the enabled whisperx/qwen/vosk engines.
     voters: Optional[tuple] = None
     voter_priors: Optional[dict] = None
-    # Stage 4: SE-DiCoW on overlapped chunks (transcript-free mode).
+    # Stage 4: diarize early for the overlap map (triage, dash cues) ...
+    overlap_map: bool = False
+    # ... and SE-DiCoW on overlapped chunks (transcript-free mode). Words it
+    # adds belong to another speaker, so it turns on speaker labels.
     overlap_asr: bool = False
     # Two-speaker cues with leading dashes (SDH convention) for overlaps.
     dash_cues: bool = False

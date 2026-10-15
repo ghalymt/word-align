@@ -248,6 +248,48 @@ def plan_windows(n_words: int, anchors: Dict[int, Anchor], duration: float,
     return windows
 
 
+def windows_from_chunks(words: Sequence[Dict], chunk_spans: Sequence[Span],
+                        target: float = WINDOW_TARGET_S,
+                        hard_max: float = WINDOW_HARD_MAX_S) -> List[AlignWindow]:
+    """Alignment windows from the ASR chunks the words were voted in.
+
+    In transcript-free mode every voted word carries ``chunk`` (the index
+    of the VAD chunk all voters transcribed), so the chunk *is* the audio
+    span of those words -- a tighter, surer window than anchors give.
+    Consecutive chunks are joined up to about *target* seconds. A chunk
+    whose words are not contiguous (e.g. words inserted from overlapped
+    speech sit between them) gets no window: its words keep their anchor or
+    engine times.
+    """
+    members: Dict[int, List[int]] = {}
+    for i, w in enumerate(words):
+        c = w.get("chunk")
+        if c is not None and 0 <= int(c) < len(chunk_spans):
+            members.setdefault(int(c), []).append(i)
+    clean = sorted(c for c, idx in members.items() if idx[-1] - idx[0] + 1 == len(idx))
+    windows: List[AlignWindow] = []
+    run: List[int] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        s, e = chunk_spans[run[0]][0], chunk_spans[run[-1]][1]
+        if 0 < e - s <= hard_max:
+            windows.append(AlignWindow(len(windows), members[run[0]][0],
+                                       members[run[-1]][-1], s, e))
+        run.clear()
+
+    for c in clean:
+        contiguous = bool(run) and c == run[-1] + 1 and \
+            members[c][0] == members[run[-1]][-1] + 1
+        if run and (not contiguous
+                    or chunk_spans[c][1] - chunk_spans[run[0]][0] > target):
+            flush()
+        run.append(c)
+    flush()
+    return windows
+
+
 def check_window(result: Dict, window: AlignWindow, anchors: Dict[int, Anchor]) -> Tuple[bool, str]:
     """Is a forced-alignment result usable? Returns (ok, reason)."""
     times = result.get("times") or []
@@ -459,6 +501,7 @@ def run_anchor_alignment(words: List[Dict], sources: Dict[str, List[Dict]],
                          retry_aligner: Optional[Callable[[List[Dict]], Optional[List[Dict]]]] = None,
                          aligner_name: str = "Qwen3-FA",
                          first_speech: float = 0.0,
+                         windows: Optional[List[AlignWindow]] = None,
                          log: Callable[[str], None] = print) -> Dict:
     """Time *words* (dicts with ``word``) in place; returns statistics.
 
@@ -479,7 +522,11 @@ def run_anchor_alignment(words: List[Dict], sources: Dict[str, List[Dict]],
                    "windows": 0, "windows_ok": 0, "windows_retried": 0,
                    "window_failures": []}
     if aligner is not None and words:
-        windows = plan_windows(len(words), anchors, duration, first_speech)
+        if windows is None:
+            windows = plan_windows(len(words), anchors, duration, first_speech)
+            stats["window_plan"] = "anchors"
+        else:
+            stats["window_plan"] = "chunks"
         stats["windows"] = len(windows)
         results = aligner([w.to_job(texts) for w in windows]) if windows else []
         if results is None:
