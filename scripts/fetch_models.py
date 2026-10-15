@@ -1,75 +1,127 @@
-"""Download the models used by word-align's bad-audio stages.
+"""Download the models used by the robust (bad-audio) pipeline.
 
-Standalone on purpose: it imports only the standard library (plus
-``huggingface_hub`` for Hugging Face repos), so it runs under any of the
-backend venvs before the ``wordalign`` package is importable there.
+Everything lands under one models root (default ``<project>/models``, or
+``WORDALIGN_MODELS_DIR``, or ``--models``), so the app stays portable and
+nothing is read from ``~/.cache``:
 
-    python scripts/fetch_models.py --models-dir E:/Wordalign/models vad sed cohere
+    vad/silero_vad.onnx                       Silero VAD v6.2.1 (MIT)
+    sed/PretrainedSED/...                     CP-JKU PretrainedSED code (MIT)
+    sed/PretrainedSED/resources/BEATs_strong_1.pt
+    enhance/checkpoints/MossFormerGAN_SE_16K/ ClearerVoice MossFormerGAN
+    huggingface/hub/models--<org>--<name>/    Hugging Face cache layout:
+        CohereLabs/cohere-transcribe-03-2026  (gated: accept on the model page)
+        moondream/parakeet-ultra              (CC-BY-4.0)
+        pyannote/speaker-diarization-community-1 (gated, CC-BY-4.0)
+        BUT-FIT/SE-DiCoW                      (Apache-2.0)
 
-Every model lands under ``--models-dir`` (the same folder word-align reads
-through ``WORDALIGN_MODELS_DIR`` or ``<project>/models``):
+The RoFormer separation checkpoints are fetched by audio-separator itself
+(``scripts/install_robust.ps1`` does that inside the ``separate`` venv).
 
-    vad/silero_vad.onnx                     Silero VAD 6.2.1 (MIT)
-    sed/PretrainedSED/...                   PretrainedSED code + BEATs strong checkpoint (MIT)
-    huggingface/hub/models--<org>--<name>   Hugging Face snapshots (Cohere, parakeet-ultra,
-                                            pyannote Community-1, SE-DiCoW)
-    denoise/checkpoints/MossFormerGAN_SE_16K  ClearerVoice MossFormerGAN (Apache-2.0)
+Run it with any Python that has ``huggingface_hub`` (the WhisperX or Qwen
+backend venv works). Gated models need a Hugging Face token: ``HF_TOKEN``,
+``--token``, or a prior ``huggingface-cli login``.
 
-Separation (RoFormer) checkpoints are fetched by audio-separator itself
-(see scripts/install_robust.ps1), because it knows its own mirrors.
-
-Gated Hugging Face repos (Cohere Transcribe, pyannote Community-1) need a
-token: log in once with ``huggingface-cli login`` or set ``HF_TOKEN``.
+    python scripts/fetch_models.py                       # everything
+    python scripts/fetch_models.py --only vad,sed        # a subset
+    python scripts/fetch_models.py --list                # show what exists
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import io
-import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
 
-SILERO_VERSION = "6.2.1"
+ROOT = Path(__file__).resolve().parent.parent
+
+SILERO_VERSION = "v6.2.1"
 SILERO_SHA256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
-SILERO_URL = ("https://raw.githubusercontent.com/snakers4/silero-vad/"
-              f"v{SILERO_VERSION}/src/silero_vad/data/silero_vad.onnx")
+SILERO_URLS = [
+    f"https://github.com/snakers4/silero-vad/raw/{SILERO_VERSION}/src/silero_vad/data/silero_vad.onnx",
+]
+SILERO_WHEEL = ("https://files.pythonhosted.org/packages/py3/s/silero-vad/"
+                "silero_vad-6.2.1-py3-none-any.whl")
 
 PRETRAINED_SED_COMMIT = "1aa47e482f7e89904cba2338999345025d8b4e36"
 PRETRAINED_SED_ZIP = ("https://codeload.github.com/fschmid56/PretrainedSED/zip/"
                       + PRETRAINED_SED_COMMIT)
-PRETRAINED_SED_CKPT = ("https://github.com/fschmid56/PretrainedSED/releases/"
-                       "download/v0.0.1/BEATs_strong_1.pt")
+BEATS_STRONG_URL = ("https://github.com/fschmid56/PretrainedSED/releases/"
+                    "download/v0.0.1/BEATs_strong_1.pt")
 
-HF_REPOS = {
+HF_MODELS = {
     "cohere": "CohereLabs/cohere-transcribe-03-2026",
     "parakeet": "moondream/parakeet-ultra",
     "diarize": "pyannote/speaker-diarization-community-1",
     "sedicow": "BUT-FIT/SE-DiCoW",
 }
-DENOISE_REPO = "alibabasglab/MossFormerGAN_SE_16K"
-
-COMPONENTS = ("vad", "sed", "cohere", "parakeet", "diarize", "sedicow", "denoise")
+COMPONENTS = ("vad", "sed", "denoise", "cohere", "parakeet", "diarize", "sedicow")
 
 
 def log(msg: str) -> None:
     print(f"[fetch] {msg}", flush=True)
 
 
-def _download(url: str, dest: Path) -> Path:
+def models_root(cli_value: str | None) -> Path:
+    if cli_value:
+        return Path(cli_value)
+    if os.environ.get("WORDALIGN_MODELS_DIR"):
+        return Path(os.environ["WORDALIGN_MODELS_DIR"])
+    return ROOT / "models"
+
+
+def _download(url: str, dest: Path, expected_sha256: str | None = None) -> None:
+    """Stream *url* to *dest* atomically (a .part file renamed at the end)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    log(f"downloading {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "word-align"})
-    with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:
-        shutil.copyfileobj(resp, out, length=1 << 20)
-    os.replace(tmp, dest)
-    return dest
+    part = dest.with_suffix(dest.suffix + ".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "wordalign-fetch"})
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as out:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done, last = 0, time.time()
+        while True:
+            block = resp.read(1 << 20)
+            if not block:
+                break
+            out.write(block)
+            digest.update(block)
+            done += len(block)
+            if time.time() - last > 15 and total:
+                log(f"  {dest.name}: {done / total:.0%} of {total / 1e6:.0f} MB")
+                last = time.time()
+    if expected_sha256 and digest.hexdigest() != expected_sha256:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(f"checksum mismatch for {url}")
+    os.replace(part, dest)
+
+
+def fetch_vad(root: Path) -> None:
+    dest = root / "vad" / "silero_vad.onnx"
+    if dest.is_file() and _sha256(dest) == SILERO_SHA256:
+        log(f"vad: present ({dest})")
+        return
+    for url in SILERO_URLS:
+        try:
+            _download(url, dest, SILERO_SHA256)
+            log(f"vad: downloaded {dest}")
+            return
+        except Exception as exc:  # fall back to the PyPI wheel
+            log(f"vad: {url} failed ({exc}); trying the PyPI wheel")
+    with tempfile.TemporaryDirectory() as tmp:
+        wheel = Path(tmp) / "silero.whl"
+        _download(SILERO_WHEEL, wheel)
+        with zipfile.ZipFile(wheel) as zf:
+            data = zf.read("silero_vad/data/silero_vad.onnx")
+    if hashlib.sha256(data).hexdigest() != SILERO_SHA256:
+        raise RuntimeError("Silero VAD from the wheel failed its checksum")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    log(f"vad: extracted {dest} from the PyPI wheel")
 
 
 def _sha256(path: Path) -> str:
@@ -80,110 +132,125 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def fetch_vad(models: Path) -> None:
-    dest = models / "vad" / "silero_vad.onnx"
-    if dest.exists() and _sha256(dest) == SILERO_SHA256:
-        log(f"vad: already present ({dest})")
-        return
-    try:
-        _download(SILERO_URL, dest)
-        if _sha256(dest) == SILERO_SHA256:
-            log(f"vad: ok ({dest})")
-            return
-        log("vad: checksum mismatch from GitHub; trying the PyPI wheel")
-    except Exception as exc:  # network / 404
-        log(f"vad: GitHub download failed ({exc}); trying the PyPI wheel")
-    meta_url = f"https://pypi.org/pypi/silero-vad/{SILERO_VERSION}/json"
-    with urllib.request.urlopen(meta_url, timeout=60) as resp:
-        meta = json.load(resp)
-    wheel = next(u for u in meta["urls"] if u["filename"].endswith(".whl"))
-    with urllib.request.urlopen(wheel["url"], timeout=120) as resp:
-        data = resp.read()
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        payload = zf.read("silero_vad/data/silero_vad.onnx")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(payload)
-    if _sha256(dest) != SILERO_SHA256:
-        raise RuntimeError("Silero VAD checksum mismatch; refusing to use it")
-    log(f"vad: ok from PyPI ({dest})")
-
-
-def fetch_sed(models: Path) -> None:
-    root = models / "sed" / "PretrainedSED"
-    marker = root / ".commit"
-    if not (marker.exists() and marker.read_text().strip() == PRETRAINED_SED_COMMIT):
-        log("sed: fetching PretrainedSED code")
+def fetch_sed(root: Path) -> None:
+    code_dir = root / "sed" / "PretrainedSED"
+    if not (code_dir / "models" / "beats").is_dir():
+        log("sed: downloading PretrainedSED code "
+            f"@{PRETRAINED_SED_COMMIT[:8]}")
         with tempfile.TemporaryDirectory() as tmp:
-            zpath = _download(PRETRAINED_SED_ZIP, Path(tmp) / "sed.zip")
-            with zipfile.ZipFile(zpath) as zf:
+            archive = Path(tmp) / "sed.zip"
+            _download(PRETRAINED_SED_ZIP, archive)
+            with zipfile.ZipFile(archive) as zf:
                 zf.extractall(tmp)
-            src = next(p for p in Path(tmp).iterdir()
-                       if p.is_dir() and p.name.startswith("PretrainedSED"))
-            if root.exists():
-                shutil.rmtree(root)
-            root.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(root))
-        marker.write_text(PRETRAINED_SED_COMMIT)
-    ckpt = root / "resources" / "BEATs_strong_1.pt"
-    if not ckpt.exists():
-        _download(PRETRAINED_SED_CKPT, ckpt)
-    log(f"sed: ok ({root})")
+            extracted = next(p for p in Path(tmp).iterdir()
+                             if p.is_dir() and p.name.startswith("PretrainedSED"))
+            if code_dir.exists():
+                shutil.rmtree(code_dir)
+            code_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(extracted), str(code_dir))
+        (code_dir / "COMMIT").write_text(PRETRAINED_SED_COMMIT + "\n",
+                                         encoding="utf-8")
+    ckpt = code_dir / "resources" / "BEATs_strong_1.pt"
+    if ckpt.is_file() and ckpt.stat().st_size > 1_000_000:
+        log(f"sed: checkpoint present ({ckpt})")
+        return
+    log("sed: downloading BEATs_strong_1.pt")
+    _download(BEATS_STRONG_URL, ckpt)
+    log(f"sed: downloaded {ckpt}")
 
 
-def _hf_snapshot(repo: str, hub: Path, **kwargs) -> str:
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:  # pragma: no cover - depends on the venv
-        raise RuntimeError("huggingface_hub is not installed in this Python; "
-                           "run this script with a backend venv") from exc
-    log(f"hf: {repo} -> {hub if 'local_dir' not in kwargs else kwargs['local_dir']}")
-    if "local_dir" in kwargs:
-        return snapshot_download(repo_id=repo, **kwargs)
-    return snapshot_download(repo_id=repo, cache_dir=str(hub), **kwargs)
+def _hf_token(cli_token: str | None):
+    return cli_token or os.environ.get("HF_TOKEN") or None
 
 
-def fetch_hf(component: str, models: Path) -> None:
-    hub = models / "huggingface" / "hub"
-    hub.mkdir(parents=True, exist_ok=True)
-    path = _hf_snapshot(HF_REPOS[component], hub)
-    log(f"{component}: ok ({path})")
+def _snapshot(repo_id: str, token, **kwargs) -> str:
+    from huggingface_hub import snapshot_download
+    for attempt in range(1, 4):
+        try:
+            return snapshot_download(repo_id, token=token, **kwargs)
+        except Exception as exc:
+            name = type(exc).__name__
+            if "Gated" in name or "401" in str(exc) or "403" in str(exc):
+                raise RuntimeError(
+                    f"{repo_id} is gated: accept its terms on "
+                    f"https://huggingface.co/{repo_id} and log in "
+                    "(huggingface-cli login) or set HF_TOKEN") from exc
+            if attempt == 3:
+                raise
+            log(f"  {repo_id}: {name} ({exc}); retrying in {10 * attempt}s")
+            time.sleep(10 * attempt)
+    raise AssertionError("unreachable")
 
 
-def fetch_denoise(models: Path) -> None:
-    target = models / "denoise" / "checkpoints" / "MossFormerGAN_SE_16K"
-    target.mkdir(parents=True, exist_ok=True)
-    _hf_snapshot(DENOISE_REPO, models, local_dir=str(target))
-    log(f"denoise: ok ({target})")
+def fetch_denoise(root: Path, token) -> None:
+    dest = root / "enhance" / "checkpoints" / "MossFormerGAN_SE_16K"
+    if (dest / "last_best_checkpoint").is_file():
+        log(f"denoise: present ({dest})")
+        return
+    log("denoise: downloading alibabasglab/MossFormerGAN_SE_16K")
+    _snapshot("alibabasglab/MossFormerGAN_SE_16K", token, local_dir=str(dest))
+    log(f"denoise: downloaded {dest}")
+
+
+def fetch_hf(root: Path, key: str, token) -> None:
+    repo_id = HF_MODELS[key]
+    cache = root / "huggingface" / "hub"
+    cache.mkdir(parents=True, exist_ok=True)
+    log(f"{key}: downloading {repo_id} into {cache}")
+    path = _snapshot(repo_id, token, cache_dir=str(cache))
+    log(f"{key}: ready at {path}")
+
+
+def list_models(root: Path) -> None:
+    checks = {
+        "vad": root / "vad" / "silero_vad.onnx",
+        "sed": root / "sed" / "PretrainedSED" / "resources" / "BEATs_strong_1.pt",
+        "denoise": root / "enhance" / "checkpoints" / "MossFormerGAN_SE_16K"
+                   / "last_best_checkpoint",
+    }
+    for key, repo in HF_MODELS.items():
+        checks[key] = (root / "huggingface" / "hub"
+                       / ("models--" + repo.replace("/", "--")) / "snapshots")
+    for key in COMPONENTS:
+        path = checks[key]
+        print(f"  {key:9s} {'yes' if path.exists() else 'no ':3s} {path}")
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--models-dir", required=True)
-    ap.add_argument("components", nargs="*", default=list(COMPONENTS),
-                    help=f"any of: {', '.join(COMPONENTS)} (default: all)")
+    ap.add_argument("--models", help="models root (default: WORDALIGN_MODELS_DIR "
+                                     "or <project>/models)")
+    ap.add_argument("--only", help="comma-separated subset of: "
+                                   + ",".join(COMPONENTS))
+    ap.add_argument("--token", help="Hugging Face token for gated models")
+    ap.add_argument("--list", action="store_true", help="show what is present")
     args = ap.parse_args(argv)
-    models = Path(args.models_dir).expanduser().resolve()
+    root = models_root(args.models)
+    if args.list:
+        list_models(root)
+        return 0
+    wanted = [c.strip() for c in (args.only or ",".join(COMPONENTS)).split(",")
+              if c.strip()]
+    unknown = sorted(set(wanted) - set(COMPONENTS))
+    if unknown:
+        ap.error(f"unknown component(s): {', '.join(unknown)}")
+    token = _hf_token(args.token)
     failed = []
-    for comp in args.components:
-        if comp not in COMPONENTS:
-            ap.error(f"unknown component {comp!r}")
+    for key in wanted:
         try:
-            if comp == "vad":
-                fetch_vad(models)
-            elif comp == "sed":
-                fetch_sed(models)
-            elif comp == "denoise":
-                fetch_denoise(models)
+            if key == "vad":
+                fetch_vad(root)
+            elif key == "sed":
+                fetch_sed(root)
+            elif key == "denoise":
+                fetch_denoise(root, token)
             else:
-                fetch_hf(comp, models)
+                fetch_hf(root, key, token)
         except Exception as exc:
-            log(f"{comp}: FAILED: {exc}")
-            failed.append(comp)
-    if failed:
-        log(f"failed: {', '.join(failed)}")
-        return 1
-    log("all requested models are present")
-    return 0
+            failed.append(key)
+            log(f"{key}: FAILED: {exc}")
+    log("done" + (f"; failed: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
