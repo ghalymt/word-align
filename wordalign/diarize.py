@@ -92,7 +92,11 @@ def diarize_turns(audio_path: str, num_speakers: Optional[int] = None,
     workdir = tempfile.mkdtemp(prefix="wordalign_diarize_")
     try:
         wav = _to_wav16k(audio_path, workdir)
-        if not pyannote_available():
+        # Prefer the backend venv (pyannote.audio 4 + CUDA torch); an
+        # importable pyannote here is only the fallback, since the main
+        # environment usually has a CPU torch or an older pyannote.
+        from .backends import backend_python
+        if backend_python("diarize") or not pyannote_available():
             return _diarize_out_of_process(wav, num_speakers, model, cache_dir,
                                            cancel_event)
         pipeline = None
@@ -107,7 +111,9 @@ def diarize_turns(audio_path: str, num_speakers: Optional[int] = None,
                 f"could not load {model}: accept its terms on huggingface.co "
                 "and set HF_TOKEN, or put it in the local Hugging Face cache")
         options = {"num_speakers": num_speakers} if num_speakers else {}
-        output = pipeline(wav, **options)
+        # A waveform dict, not a path: pyannote.audio 4 reads files through
+        # torchcodec, which is often missing.
+        output = pipeline(_waveform(wav), **options)
         # pyannote 4 wraps the annotation; 3.x returns it directly.
         annotation = getattr(output, "speaker_diarization", output)
         return [(float(turn.start), float(turn.end), str(label))
@@ -118,6 +124,17 @@ def diarize_turns(audio_path: str, num_speakers: Optional[int] = None,
         raise DiarizationUnavailable(f"pyannote failed: {exc}") from exc
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _waveform(wav_path: str) -> Dict:
+    import wave
+    import numpy as np
+    import torch
+    with wave.open(wav_path, "rb") as wf:
+        sr = wf.getframerate()
+        data = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
+    x = torch.from_numpy(data.astype(np.float32) / 32767.0)[None, :]
+    return {"waveform": x, "sample_rate": sr}
 
 
 def _diarize_out_of_process(wav: str, num_speakers: Optional[int], model: str,

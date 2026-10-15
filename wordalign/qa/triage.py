@@ -31,14 +31,15 @@ TIER_LABELS = {ACCEPT: "Accept", QUICK: "Quick check", REDO: "Redo"}
 
 REDO_ERROR_SHARE = 0.30          # edit-vs-retype line (Gaur et al.)
 ACCEPT_RISK = 0.25
-REDO_RISK = 0.65
 
 # Logistic weights: risk = sigmoid(bias + sum(w * feature)).
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "bias": -3.2,
     "text_error": 6.0,        # mean(1 - text confidence)
     "low_text": 2.0,          # share of words with text confidence < 0.6
+    "disputed_any": 2.6,      # at least one such word: never "Accept"
     "weak_timing": 2.2,       # share of words with timing confidence < 0.5
+    "weak_timing_any": 1.5,   # at least one such word
     "interpolated": 3.0,      # share of words interpolated
     "unheard": 2.5,           # reference words no engine heard
     "overlap": 1.4,
@@ -113,10 +114,14 @@ def cue_features(words: Sequence[Dict], conditions: Iterable[str],
     n = max(1, len(words))
     text_conf = [float(w.get("text_conf", 1.0)) for w in words]
     timing_conf = [float(w.get("timing_conf", 0.75)) for w in words]
+    low_text = sum(1 for c in text_conf if c < 0.6)
+    weak = sum(1 for c in timing_conf if c < 0.5)
     feats: Dict[str, float] = {
         "text_error": sum(1.0 - c for c in text_conf) / n,
-        "low_text": sum(1 for c in text_conf if c < 0.6) / n,
-        "weak_timing": sum(1 for c in timing_conf if c < 0.5) / n,
+        "low_text": low_text / n,
+        "disputed_any": 1.0 if low_text else 0.0,
+        "weak_timing": weak / n,
+        "weak_timing_any": 1.0 if weak else 0.0,
         "interpolated": sum(1 for w in words if w.get("interpolated")) / n,
         "unheard": (sum(1 for w in words if w.get("heard_by", 1) == 0) / n
                     if mode == "reference" else 0.0),
@@ -174,7 +179,9 @@ def score_cue(words: Sequence[Dict], conditions: Iterable[str], removed: int = 0
     risk = _sigmoid(z)
     est_error = min(1.0, feats["text_error"] * 1.25 + 0.5 * feats["unheard"]) \
         if mode == "ensemble" else min(1.0, feats["unheard"])
-    if est_error >= REDO_ERROR_SHARE or risk >= REDO_RISK:
+    # Risk decides whether a cue needs a look; the predicted error share
+    # decides whether editing still beats retyping (Gaur et al.: ~30%).
+    if est_error >= REDO_ERROR_SHARE:
         tier = REDO
     elif risk < ACCEPT_RISK:
         tier = ACCEPT
@@ -213,9 +220,19 @@ def triage_segments(segments: Sequence[Dict], words: Sequence[Dict],
             tier=tier, risk=risk, est_error=est_error, reasons=reasons,
             features={kk: round(v, 3) for kk, v in feats.items() if v},
             speaker=seg.get("speaker"),
-            words=[{"word": w.get("word"), "start": w.get("start"), "end": w.get("end"),
-                    "text_conf": w.get("text_conf"), "timing_conf": w.get("timing_conf"),
-                    "source": w.get("source")} for w in cue_words]))
+            words=[_review_word(w) for w in cue_words]))
+    return out
+
+
+def _review_word(w: Dict) -> Dict:
+    out = {"word": w.get("word"), "start": w.get("start"), "end": w.get("end"),
+           "text_conf": w.get("text_conf"), "timing_conf": w.get("timing_conf"),
+           "source": w.get("source")}
+    alts = w.get("alternatives")
+    if alts:
+        # The readings the losing voters heard ("" = they heard nothing),
+        # so a reviewer can pick one instead of retyping.
+        out["alternatives"] = alts
     return out
 
 

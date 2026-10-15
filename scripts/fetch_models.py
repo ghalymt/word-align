@@ -120,7 +120,10 @@ def fetch_sed(models: Path) -> None:
             src = next(p for p in Path(tmp).iterdir()
                        if p.is_dir() and p.name.startswith("PretrainedSED"))
             if root.exists():
-                shutil.rmtree(root)
+                # Keep the superseded checkout instead of deleting it.
+                old = root.with_name(f"PretrainedSED.previous-{_stamp()}")
+                shutil.move(str(root), str(old))
+                log(f"sed: kept the previous checkout as {old.name}")
             root.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(root))
         marker.write_text(PRETRAINED_SED_COMMIT)
@@ -156,13 +159,52 @@ def fetch_denoise(models: Path) -> None:
     log(f"denoise: ok ({target})")
 
 
+def _stamp() -> str:
+    import time
+    return time.strftime("%Y%m%d-%H%M%S")
+
+
+def component_target(component: str, models: Path) -> Path:
+    """Where a component lands under the models folder."""
+    if component == "vad":
+        return models / "vad" / "silero_vad.onnx"
+    if component == "sed":
+        return models / "sed" / "PretrainedSED" / "resources" / "BEATs_strong_1.pt"
+    if component == "denoise":
+        return models / "denoise" / "checkpoints" / "MossFormerGAN_SE_16K"
+    org, name = HF_REPOS[component].split("/")
+    return models / "huggingface" / "hub" / f"models--{org}--{name}"
+
+
+def is_present(component: str, models: Path) -> bool:
+    target = component_target(component, models)
+    if component == "vad":
+        return target.exists() and _sha256(target) == SILERO_SHA256
+    if target.is_dir():
+        if component == "denoise":
+            return any(target.iterdir())
+        snaps = target / "snapshots"
+        return snaps.is_dir() and any(snaps.iterdir())
+    return target.exists()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--models-dir", required=True)
     ap.add_argument("components", nargs="*", default=list(COMPONENTS),
                     help=f"any of: {', '.join(COMPONENTS)} (default: all)")
+    ap.add_argument("--list", action="store_true",
+                    help="show each component's folder and whether it is present; "
+                         "downloads nothing")
     args = ap.parse_args(argv)
     models = Path(args.models_dir).expanduser().resolve()
+    if args.list:
+        for comp in args.components:
+            if comp not in COMPONENTS:
+                ap.error(f"unknown component {comp!r}")
+            state = "present" if is_present(comp, models) else "missing"
+            print(f"{comp:<9} {state:<8} {component_target(comp, models)}")
+        return 0
     failed = []
     for comp in args.components:
         if comp not in COMPONENTS:

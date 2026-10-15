@@ -118,19 +118,34 @@ class RobustStagesMixin:
             self._emit(StageCompleted(stage="analysis", duration_seconds=time.time() - t0))
             return None
         self._analysis_audio = audio
+        from ..audio.analysis import find_sed_dir
+        from ..audio.vad import find_vad_model
+        from ..backends import backend_python
+        models = self._models_root()
+        # Which models were there is part of the key: installing the VAD or
+        # SED model later must not replay a map computed without it.
         settings = {"vad_threshold": cfg.vad_threshold, "sed": cfg.sound_events,
-                    "version": 1}
+                    "vad_ready": bool(find_vad_model(models)),
+                    "sed_ready": bool(cfg.sound_events and find_sed_dir(models)
+                                      and backend_python("sed")),
+                    "version": 2}
+        partial: Dict = {}
 
         def compute():
-            q = analyze_audio(cfg.audio_path, models_dir=self._models_root(),
+            q = analyze_audio(cfg.audio_path, models_dir=models,
                               use_sed=cfg.sound_events, vad_threshold=cfg.vad_threshold,
                               workdir=self._workdir(), cancel_event=self.ctx.cancel_event,
                               log=lambda m: self._msg("analysis", m), audio=audio)
+            if any("failed" in n or "unavailable" in n for n in q.notes):
+                # A step failed (e.g. the SED worker crashed): use the map
+                # for this run but do not cache it, so the next run retries.
+                partial["map"] = q.to_cache()
+                return {}
             return q.to_cache()
         try:
             cached, hit = self._cached_engine("analysis", "silero+pretrainedsed",
                                               "*", settings, compute)
-            qmap = QualityMap.from_cache(cached)
+            qmap = QualityMap.from_cache(cached or partial["map"])
             if hit:
                 self._msg("analysis", "Loaded the audio quality map from cache.")
         except InterruptedError:

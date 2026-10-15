@@ -295,15 +295,19 @@ def sed_proposals(events: List[Dict], min_score: float = 0.6,
         start, end = float(e["start"]), float(e["end"])
         if end - start < _MIN_TAG_S.get(tag, 0.4):
             continue
-        out.append({"start": start, "end": min(end, start + max_duration),
-                    "tag": tag, "source": "SED (proposed)"})
+        out.append({"start": start, "end": end, "tag": tag, "source": "SED (proposed)"})
     out.sort(key=lambda x: (x["start"], x["tag"]))
+    # Merge the raw spans first (one music bed is one tag), then cap the
+    # on-screen duration of each merged tag.
     merged: List[Dict] = []
     for ev in out:
-        if merged and merged[-1]["tag"] == ev["tag"] and ev["start"] - merged[-1]["end"] < 1.0:
-            merged[-1]["end"] = max(merged[-1]["end"], ev["end"])
+        prev = next((m for m in reversed(merged) if m["tag"] == ev["tag"]), None)
+        if prev is not None and ev["start"] - prev["end"] < 1.0:
+            prev["end"] = max(prev["end"], ev["end"])
         else:
             merged.append(dict(ev))
+    for ev in merged:
+        ev["end"] = min(ev["end"], ev["start"] + max_duration)
     return merged
 
 

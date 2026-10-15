@@ -17,7 +17,6 @@ timing). Results go to ``<out>/report.json`` and ``<out>/report.md``.
 from __future__ import annotations
 
 import contextlib
-import io
 import json
 import os
 import shutil
@@ -195,7 +194,7 @@ def _fmt(v, pct=False):
 def render_markdown(report: Dict) -> str:
     variants = report.get("variants", {})
     names = list(variants)
-    lines = [f"# word-align bad-audio benchmark", "", f"Suite: `{report.get('suite')}`", ""]
+    lines = ["# word-align bad-audio benchmark", "", f"Suite: `{report.get('suite')}`", ""]
     lines += ["## Overall", "",
               "| Variant | Mode | WER | Mean shift (ms) | Within 100 ms | Invented words / 10 min "
               "| Triage recall | Accept cues with errors | Run time (s) |",
