@@ -144,6 +144,45 @@ class TestAlignerChecks(unittest.TestCase):
         words = self._setup(fa_shift=0.02)            # parakeet is independent
         self.assertTrue(all(w["timing_conf"] == CONF_FA_CONFIRMED for w in words))
 
+    def test_crosstalk_line_does_not_push_the_main_speaker(self):
+        """Reference transcript: A's line, then B's line spoken over A's next
+        line, then A's next line. The aligner lays B over A's speech."""
+        from wordalign.timing import (assign_times, enforce_order, interpolate,
+                                      repair_degenerate)
+        a1 = "here she would stay comforted and soothed"
+        b = "but the more forgetfulness had then prevailed"
+        a2 = "every chance she could steal after practice hours"
+        text = f"{a1} {b} {a2}"
+        words = [{"word": w} for w in text.split()]
+        kn = known(text)
+        # Engines hear only speaker A: a1 at 0 s, a2 at 5 s.
+        heard = timed(a1, t0=0.0) + timed(a2, t0=5.0)
+        vosk = match_source(kn, heard, "Vosk")
+        wx = match_source(kn, [dict(w, start=w["start"] + 0.03, end=w["end"] + 0.03)
+                               for w in heard], "WhisperX")
+        anchors = build_anchors(len(words), [vosk, wx])
+        n1, nb = len(a1.split()), len(b.split())
+        # The aligner put B's words over A's second line (5.0-7.8 s) and
+        # crushed a2 after it.
+        aligned = {}
+        for k in range(n1):
+            aligned[k] = ((k * 0.4, k * 0.4 + 0.3), "Qwen3-FA")
+        for k in range(nb):
+            aligned[n1 + k] = ((5.0 + k * 0.4, 5.0 + k * 0.4 + 0.3), "Qwen3-FA")
+        for k in range(len(a2.split())):
+            aligned[n1 + nb + k] = ((8.0 + k * 0.01, 8.0 + k * 0.01), "Qwen3-FA")
+        assign_times(words, [vosk, wx], anchors, aligned)
+        interpolate(words, 12.0)
+        enforce_order(words)
+        repair_degenerate(words, 12.0)
+        enforce_order(words)
+        a2_words = words[n1 + nb:]
+        for k, w in enumerate(a2_words):
+            self.assertAlmostEqual(w["start"], 5.0 + k * 0.4, delta=0.1, msg=w)
+        b_words = words[n1:n1 + nb]
+        self.assertTrue(all(w.get("fa_dropped") for w in b_words))
+        self.assertTrue(all(w["timing_conf"] < 0.5 for w in b_words))
+
     def test_zero_length_words_get_room(self):
         from wordalign.timing import repair_degenerate
         words = [{"word": "firs", "start": 108.99, "end": 109.41},

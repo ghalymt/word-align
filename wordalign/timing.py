@@ -338,17 +338,58 @@ def assign_times(words: List[Dict], matches: Sequence[SourceMatches],
     order = {name: k for k, name in enumerate(SOURCE_PRIORITY)}
     ranked = sorted(matches, key=lambda m: order.get(m.name, len(order)))
     counts: Dict[str, int] = {}
+    # Strong anchors bound every other word: nothing can start after a later
+    # word that two engines agree on, or end before an earlier one. An
+    # aligned time that breaks this (crosstalk written as its own line, a
+    # phrase voted into the wrong place) is dropped; the word is placed
+    # between its neighbours and flagged instead of shoving confident words
+    # out of the way when the order is enforced.
+    n = len(words)
+    inf = float("inf")
+    min_after = [inf] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        a = anchors.get(i)
+        min_after[i] = min(min_after[i + 1], a.span[0] if a is not None and a.strong else inf)
+    max_before = [-inf] * n
+    running = -inf
+    for i in range(n):
+        max_before[i] = running
+        a = anchors.get(i)
+        if a is not None and a.strong:
+            running = max(running, a.span[1])
     for i, w in enumerate(words):
         anchor = anchors.get(i)
         src_spans = [(m.name, m.get(i)) for m in ranked if m.get(i)]
         chosen: Optional[Tuple[Span, str, float]] = None
-        if i in aligned:
-            span, aligner = aligned[i]
-            indep = [(n, sp) for n, sp in src_spans if _independent(n, aligner)]
+        fa = aligned.get(i)
+        if fa is not None and not (anchor is not None and anchor.strong):
+            span = fa[0]
+            # A word some engine heard gets the usual tolerance; one no
+            # engine heard (a second talker, a misplaced phrase) has no
+            # evidence of its own, so it may not overlap its strong
+            # neighbours at all beyond the agreement window.
+            if src_spans:
+                late = span[0] > min_after[i + 1] + FA_OVERRIDE_S
+                early = span[1] < max_before[i] - FA_OVERRIDE_S
+            else:
+                late = span[1] > min_after[i + 1] + STRONG_AGREE_S
+                early = span[0] < max_before[i] - STRONG_AGREE_S
+            if late or early:
+                w["fa_dropped"] = True
+                fa = None
+                if anchor is None:
+                    # Left untimed: MFA / interpolation place it between
+                    # its neighbours, flagged for review.
+                    w.pop("start", None)
+                    w.pop("end", None)
+                    continue
+        if fa is not None:
+            span, aligner = fa
+            indep = [(nm, sp) for nm, sp in src_spans if _independent(nm, aligner)]
             close = any(abs(sp[0] - span[0]) <= STRONG_AGREE_S for _, sp in indep)
             far = anchor is not None and abs(anchor.span[0] - span[0]) > FA_OVERRIDE_S
             if (far and not close and anchor.strong
-                    and sum(1 for n in anchor.sources if _independent(n, aligner)) >= 1):
+                    and sum(1 for nm in anchor.sources if _independent(nm, aligner)) >= 1):
                 # Two engines agree and the aligner is far off: the aligner
                 # was forced through text in the wrong order (or the wrong
                 # speaker). Keep the engines' time.
@@ -361,7 +402,7 @@ def assign_times(words: List[Dict], matches: Sequence[SourceMatches],
         elif anchor is not None:
             chosen = (anchor.span, "+".join(anchor.sources),
                       CONF_STRONG if anchor.strong else CONF_RUN)
-        else:
+        elif not w.get("fa_dropped"):
             for name, span in src_spans:
                 chosen = (span, name, CONF_SHORT)
                 break
@@ -635,4 +676,10 @@ def run_anchor_alignment(words: List[Dict], sources: Dict[str, List[Dict]],
             log(f"{aligner_name}: {stats['windows_ok']}/{len(windows)} windows "
                 f"aligned, {stats['windows_retried']} rescued on the cleaned track")
     stats["sources"] = assign_times(words, matches, anchors, aligned)
+    dropped = sum(1 for w in words if w.get("fa_dropped"))
+    if dropped:
+        stats["fa_dropped"] = dropped
+        log(f"{dropped} aligned word time(s) contradicted the engines' timing of "
+            "neighbouring words (crosstalk or text out of order); placed between "
+            "neighbours and flagged for review")
     return stats
