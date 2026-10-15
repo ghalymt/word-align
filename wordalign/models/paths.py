@@ -64,9 +64,14 @@ def _project_root() -> Path:
 def _project_models_root() -> Path:
     """Canonical ``<project_root>/models`` directory.
 
+    ``WORDALIGN_MODELS_DIR`` moves the whole model store (every per-engine
+    default below follows it); per-engine variables still win over it.
     Always returned even if the directory does not exist yet — callers that
     need an existing path should call ``.exists()`` first.
     """
+    override = os.environ.get("WORDALIGN_MODELS_DIR")
+    if override:
+        return Path(override)
     return _project_root() / "models"
 
 

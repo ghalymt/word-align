@@ -79,6 +79,14 @@ class TestPrimaryTranscriptSegmentation(_EnsembleCase):
 
 
 class TestPrimaryTimingRefinement(_EnsembleCase):
+    """The v2.1 waterfall (``--timing fill_only``): later engines refine the
+    primary's provisional timings. Anchor timing is covered in
+    tests/test_robust_timing.py."""
+
+    def _cfg(self, **engines):
+        cfg = super()._cfg(**engines)
+        cfg.timing_strategy = "fill_only"
+        return cfg
 
     def _vosk_patches(self, vosk_words):
         return {

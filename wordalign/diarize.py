@@ -1,9 +1,18 @@
 """Speaker diarization: who spoke when, mapped onto aligned words.
 
-Uses pyannote.audio (optional: ``pip install pyannote.audio``). The default
-model, ``pyannote/speaker-diarization-3.1``, is gated on Hugging Face: accept
-its terms once and set ``HF_TOKEN`` (or keep the model in the local HF cache).
+Uses pyannote.audio. The default model, ``pyannote/speaker-diarization-
+community-1`` (pyannote.audio 4), is gated on Hugging Face: accept its terms
+once and log in or set ``HF_TOKEN`` (or keep the model in the local HF
+cache). ``pyannote/speaker-diarization-3.1`` is the fallback.
 ``WORDALIGN_DIARIZATION_MODEL`` selects another pipeline.
+
+When pyannote.audio is not importable here (the frozen app, or a main env
+without it), diarization runs out-of-process in the WhisperX venv, which
+ships pyannote.audio 4 (see ``engines/_diarize_worker.py``).
+
+Besides who-spoke-when, the turns give the **overlap regions** (two or more
+speakers at once): about 30% of NOTSOFAR-1 meeting audio but up to 90% of
+its ASR errors, so they drive review triage and overlapped-speech ASR.
 
 There is deliberately no fallback here. Treating every pause as a new
 speaker (what the plugin adapter's offline heuristic does) puts wrong
@@ -18,7 +27,8 @@ import subprocess
 import tempfile
 from typing import Dict, List, Optional, Sequence, Tuple
 
-DEFAULT_MODEL = "pyannote/speaker-diarization-3.1"
+DEFAULT_MODEL = "pyannote/speaker-diarization-community-1"
+FALLBACK_MODEL = "pyannote/speaker-diarization-3.1"
 # A word with no overlapping speaker turn takes the nearest turn within this
 # many seconds (diarization turns often stop just short of a word's end).
 NEAREST_TURN_S = 1.0
@@ -72,16 +82,30 @@ def _load_pipeline(model: str, cache_dir: Optional[str]):
 
 def diarize_turns(audio_path: str, num_speakers: Optional[int] = None,
                   model: Optional[str] = None,
-                  cache_dir: Optional[str] = None) -> List[Turn]:
-    """Run pyannote and return ``(start, end, raw_label)`` speaker turns."""
-    if not pyannote_available():
-        raise DiarizationUnavailable(
-            "pyannote.audio is not installed (pip install pyannote.audio)")
+                  cache_dir: Optional[str] = None,
+                  cancel_event=None) -> List[Turn]:
+    """Run pyannote and return ``(start, end, raw_label)`` speaker turns.
+
+    Turns may overlap (two people talking at once); see overlap_regions().
+    """
     model = model or os.environ.get("WORDALIGN_DIARIZATION_MODEL", DEFAULT_MODEL)
     workdir = tempfile.mkdtemp(prefix="wordalign_diarize_")
     try:
         wav = _to_wav16k(audio_path, workdir)
-        pipeline = _load_pipeline(model, cache_dir)
+        if not pyannote_available():
+            return _diarize_out_of_process(wav, num_speakers, model, cache_dir,
+                                           cancel_event)
+        pipeline = None
+        for candidate in dict.fromkeys((model, FALLBACK_MODEL)):
+            try:
+                pipeline = _load_pipeline(candidate, cache_dir)
+                break
+            except DiarizationUnavailable:
+                pipeline = None
+        if pipeline is None:
+            raise DiarizationUnavailable(
+                f"could not load {model}: accept its terms on huggingface.co "
+                "and set HF_TOKEN, or put it in the local Hugging Face cache")
         options = {"num_speakers": num_speakers} if num_speakers else {}
         output = pipeline(wav, **options)
         # pyannote 4 wraps the annotation; 3.x returns it directly.
@@ -94,6 +118,57 @@ def diarize_turns(audio_path: str, num_speakers: Optional[int] = None,
         raise DiarizationUnavailable(f"pyannote failed: {exc}") from exc
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _diarize_out_of_process(wav: str, num_speakers: Optional[int], model: str,
+                            cache_dir: Optional[str], cancel_event=None) -> List[Turn]:
+    from pathlib import Path
+    from .backends import backend_python
+    from .engines._worker import WorkerCancelled, WorkerError, run_worker
+    python = backend_python("diarize")
+    if not python:
+        raise DiarizationUnavailable(
+            "pyannote.audio is not installed here and no WhisperX venv was "
+            "found (it ships pyannote.audio 4)")
+    args = ["--audio", wav, "--model", model]
+    if cache_dir:
+        args += ["--cache-dir", cache_dir]
+    if num_speakers:
+        args += ["--num-speakers", str(num_speakers)]
+    worker = Path(__file__).resolve().parent / "engines" / "_diarize_worker.py"
+    try:
+        payload = run_worker(python, worker, args, "__WA_DIARIZE_JSON__",
+                             cancel_event=cancel_event, name="diarization worker")
+    except WorkerCancelled:
+        raise
+    except WorkerError as exc:
+        raise DiarizationUnavailable(str(exc).splitlines()[-1]) from exc
+    return [(float(s), float(e), str(lbl)) for s, e, lbl in payload.get("turns", [])]
+
+
+def overlap_regions(turns: Sequence[Turn], min_duration: float = 0.1) -> List[Tuple[float, float]]:
+    """Merged ``(start, end)`` spans where two or more speakers talk at once."""
+    events = []
+    for s, e, _ in turns:
+        if e > s:
+            events.append((s, 1))
+            events.append((e, -1))
+    events.sort(key=lambda x: (x[0], x[1]))
+    regions: List[Tuple[float, float]] = []
+    active, start = 0, None
+    for t, delta in events:
+        before = active
+        active += delta
+        if before < 2 <= active:
+            start = t
+        elif before >= 2 > active and start is not None:
+            if t - start >= min_duration:
+                if regions and start - regions[-1][1] < 0.05:
+                    regions[-1] = (regions[-1][0], t)
+                else:
+                    regions.append((start, t))
+            start = None
+    return [(round(s, 3), round(e, 3)) for s, e in regions]
 
 
 def speaker_names(turns: Sequence[Turn]) -> Dict[str, str]:

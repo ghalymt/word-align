@@ -47,6 +47,10 @@ def dicts_to_words(dicts: list[dict[str, Any]],
             matched=d.get("matched", False),
             engine_id=d.get("engine_id"),
             model_id=d.get("model_id"),
+            speaker=d.get("speaker"),
+            metadata={k: d[k] for k in ("text_conf", "timing_conf", "interpolated",
+                                        "heard_by", "voters", "alternatives")
+                      if k in d},
         ))
     return result
 

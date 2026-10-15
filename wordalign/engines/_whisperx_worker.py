@@ -126,6 +126,10 @@ def main():
                     help="HF cache dir holding the WhisperX + alignment models "
                          "(enables offline mode).")
     ap.add_argument("--batch-size", type=int, default=8)
+    ap.add_argument("--mode", choices=["transcribe", "align"], default="transcribe",
+                    help="align: time known text windows (--align-json) with "
+                         "the wav2vec2 alignment model only")
+    ap.add_argument("--align-json", default=None)
     args = ap.parse_args()
 
     # Locate ffmpeg BEFORE any audio loading so whisperx.audio.load_audio
@@ -156,6 +160,9 @@ def main():
     import whisperx  # noqa: E402
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    if args.mode == "align":
+        _align_mode(args, whisperx, torch, device)
+        return
     compute_type = "float16" if device == "cuda" else "int8"
     log(f"[whisperx] device={device} model={args.model_size} "
         f"language={args.language} offline={offline}")
@@ -210,6 +217,61 @@ def main():
     sys.stdout.write("\n" + SENTINEL + json.dumps(payload) + "\n")
     sys.stdout.flush()
     log(f"[whisperx] done: {len(words)} words, {len(events)} events")
+
+
+def _load_align_model(whisperx, language, device):
+    model_name = ALIGNMENT_MODEL_MAP.get(language, ALIGNMENT_MODEL_MAP["default"])
+    try:
+        return whisperx.load_align_model(language_code=language, device=device,
+                                         model_name=model_name)
+    except Exception as exc:
+        log(f"[whisperx] {model_name} unavailable ({exc}); falling back to "
+            "WhisperX auto-selection.")
+        return whisperx.load_align_model(language_code=language, device=device)
+
+
+def _align_mode(args, whisperx, torch, device):
+    """Time known text: one whisperx.align() segment per window."""
+    from difflib import SequenceMatcher
+
+    def norm(w):
+        return re.sub(r"[^\w\s]", "", str(w)).lower()
+
+    with open(args.align_json, "r", encoding="utf-8") as f:
+        windows = json.load(f)
+    audio = whisperx.load_audio(args.audio)
+    model_a, metadata = _load_align_model(whisperx, args.language, device)
+    out = []
+    for win in windows:
+        words = [str(w) for w in win["words"]]
+        res = {"id": win.get("id"), "start": win["start"], "end": win["end"],
+               "times": [None] * len(words), "status": "ok"}
+        try:
+            aligned = whisperx.align(
+                [{"start": float(win["start"]), "end": float(win["end"]),
+                  "text": " ".join(words)}],
+                model_a, metadata, audio, device, return_char_alignments=False,
+                interpolate_method="ignore")
+            got = [w for w in aligned.get("word_segments", [])
+                   if w.get("start") is not None and w.get("end") is not None]
+        except Exception as exc:
+            res["status"] = f"error: {exc}"
+            out.append(res)
+            continue
+        sm = SequenceMatcher(None, [norm(w) for w in words],
+                             [norm(g.get("word", "")) for g in got], autojunk=False)
+        for block in sm.get_matching_blocks():
+            for k in range(block.size):
+                g = got[block.b + k]
+                res["times"][block.a + k] = [round(float(g["start"]), 3),
+                                             round(float(g["end"]), 3)]
+        out.append(res)
+    del model_a, metadata, audio
+    _clean(torch)
+    payload = {"mode": "align", "windows": out}
+    sys.stdout.write("\n" + SENTINEL + json.dumps(payload) + "\n")
+    sys.stdout.flush()
+    log(f"[whisperx] aligned {len(out)} windows")
 
 
 if __name__ == "__main__":

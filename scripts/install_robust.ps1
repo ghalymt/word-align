@@ -179,7 +179,8 @@ if ($Components -contains "cohere") {
 
 if ($Components -contains "parakeet") {
     Write-Section "parakeet-ultra venv (Moondream Photon)"
-    $pkPy = New-BackendVenv -Name "parakeet" -Packages @("moondream==2.6.1", "huggingface_hub", "soundfile", "numpy")
+    # kestrel (Photon) needs torch >= 2.8; install the CUDA build first.
+    $pkPy = New-BackendVenv -Name "parakeet" -Torch -Packages @("moondream==2.6.1", "huggingface_hub", "numpy")
     Fetch-Models $pkPy @("parakeet")
 }
 

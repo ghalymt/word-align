@@ -95,6 +95,7 @@ class PipelineResult:
     job_manifest_path: Optional[str] = None
     sentence_level_vtt_path: Optional[str] = None
     sentence_level_ass_path: Optional[str] = None
+    review_json_path: Optional[str] = None
     error: Optional[str] = None
     cancelled: bool = False
 
@@ -110,5 +111,6 @@ class PipelineResult:
             self.transcript_docx_path,
             self.audio_tags_srt_path,
             self.combined_srt_path,
+            self.review_json_path,
             self.job_manifest_path,
         ) if p]

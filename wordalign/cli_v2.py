@@ -136,7 +136,48 @@ def _parse_args(argv=None) -> PipelineConfig:
     p.add_argument("--min-cue-ms", type=int, default=None,
                    help="minimum on-screen duration per cue, ms (default 700)")
     p.add_argument("--profile", default=None,
-                   help="pipeline profile name (fast, balanced, maximum_quality, cpu_only)")
+                   help="pipeline profile name (fast, balanced, maximum_quality, "
+                        "robust, cpu_only) or a profile .json")
+    robust = p.add_argument_group(
+        "bad-audio robustness (v2.2; see docs/robust_flow.md)")
+    robust.add_argument("--models-dir", default=None,
+                        help="model store root (default <project>/models, or "
+                             "set WORDALIGN_MODELS_DIR)")
+    robust.add_argument("--cleanup", choices=["off", "auto", "all"], default=None,
+                        help="gated audio cleanup for the ASR track: auto = only "
+                             "where the quality map says it helps (default off; "
+                             "the robust profile uses auto)")
+    robust.add_argument("--voters", default=None, metavar="LIST",
+                        help="transcript-free voters, comma-separated: cohere, "
+                             "qwen, parakeet, whisperx, vosk")
+    robust.add_argument("--overlap-asr", action="store_true", default=None,
+                        help="transcribe overlapped speech per speaker with "
+                             "SE-DiCoW (transcript-free mode)")
+    robust.add_argument("--dash-cues", action="store_true", default=None,
+                        help="join quick two-speaker exchanges into dash cues "
+                             "(needs --diarize)")
+    robust.add_argument("--dash-style", choices=["-", "- "], default=None,
+                        help="dash cue prefix: '-' (Netflix English) or '- '")
+    robust.add_argument("--timing", dest="timing_strategy",
+                        choices=["anchor", "fill_only"], default=None,
+                        help="anchor = anchors + forced alignment (default); "
+                             "fill_only = the v2.1 waterfall")
+    robust.add_argument("--no-forced-align", dest="forced_align",
+                        action="store_false", default=None,
+                        help="time words from engine anchors only")
+    robust.add_argument("--no-vad", dest="analysis", action="store_false",
+                        default=None, help="skip the audio analysis stage "
+                                           "(VAD, SNR, sound events)")
+    robust.add_argument("--no-sound-events", dest="sound_events",
+                        action="store_false", default=None,
+                        help="skip the sound-event model in the analysis stage")
+    robust.add_argument("--no-hallucination-filter", dest="hallucination_filter",
+                        action="store_false", default=None,
+                        help="keep engine words the audio does not support")
+    robust.add_argument("--no-triage", dest="triage", action="store_false",
+                        default=None, help="do not write <name>_review.json")
+    robust.add_argument("--doctor", action="store_true",
+                        help="list the installed backends and models, then exit")
     p.add_argument("--punctuation", action="store_true",
                    help="restore punctuation & capitalization on subtitle cues "
                         "(uses local LLM if configured, rules otherwise)")
@@ -178,6 +219,12 @@ def _parse_args(argv=None) -> PipelineConfig:
             and a.min_cue_ms > a.max_duration_ms):
         p.error("--min-cue-ms cannot be longer than --max-duration-ms")
 
+    if a.models_dir:
+        os.environ["WORDALIGN_MODELS_DIR"] = os.path.abspath(a.models_dir)
+    if a.doctor:
+        from .doctor import print_report
+        print_report()
+        sys.exit(0)
     if a.gui:
         from .gui.server import run_server
         run_server(port=a.port)
@@ -255,6 +302,22 @@ def _parse_args(argv=None) -> PipelineConfig:
     if a.speakers is not None and a.speakers < 1:
         p.error(f"--speakers must be at least 1 (got {a.speakers})")
 
+    robust_overrides = {}
+    for name in ("analysis", "sound_events", "hallucination_filter", "cleanup",
+                 "overlap_asr", "dash_cues", "dash_style", "timing_strategy",
+                 "forced_align", "triage"):
+        value = getattr(a, name)
+        if value is not None:
+            robust_overrides[name] = value
+    voters = None
+    if a.voters is not None:
+        voters = tuple(v.strip().lower() for v in a.voters.split(",") if v.strip())
+        unknown = sorted(set(voters) - {"cohere", "qwen", "parakeet", "whisperx", "vosk"})
+        if unknown or not voters:
+            p.error(f"--voters: unknown voter(s) {', '.join(unknown)}; choose from "
+                    "cohere, qwen, parakeet, whisperx, vosk")
+        robust_overrides["voters"] = voters
+
     return PipelineConfig(
         audio_path=a.audio,
         transcript_path=a.transcript,
@@ -295,6 +358,8 @@ def _parse_args(argv=None) -> PipelineConfig:
         profile_name=a.profile,
         engine_overrides=engine_overrides,
         profile_overrides=profile_overrides,
+        robust_overrides=robust_overrides,
+        **{k: v for k, v in robust_overrides.items()},
     )
 
 
