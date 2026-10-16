@@ -1168,6 +1168,35 @@ def _clean_halves(seg: Dict) -> Optional[List[Dict]]:
     return pieces
 
 
+def attach_punctuation_lines(segments: List[Dict]) -> List[Dict]:
+    """A transcript line that is only punctuation (a closing quote on a line
+    of its own) belongs to the word before it; it has no speech of its own,
+    so it must not set a cue's start or end."""
+    out: List[Dict] = []
+    pending = ""
+    for seg in segments:
+        words = seg.get("words")
+        lone = (not seg.get("tag") and words
+                and not any(normalize_word(w.get("word", "")) for w in words))
+        if lone:
+            mark = "".join(_flat(seg["text"]).split())
+            prev = out[-1] if out and not out[-1].get("tag") and out[-1].get("words") else None
+            if prev is not None:
+                last = dict(prev["words"][-1], word=f"{prev['words'][-1].get('word', '')}{mark}")
+                out[-1] = dict(prev, text=f"{_flat(prev['text'])}{mark}",
+                               words=list(prev["words"][:-1]) + [last])
+            else:
+                pending += mark
+            continue
+        if pending and not seg.get("tag") and words:
+            first = dict(words[0], word=f"{pending}{words[0].get('word', '')}")
+            seg = dict(seg, text=f"{pending}{_flat(seg['text'])}", words=[first] + list(words[1:]))
+            _retime(seg)
+            pending = ""
+        out.append(seg)
+    return out
+
+
 def inline_mid_sentence_tags(segments: List[Dict]) -> List[Dict]:
     """A transcript ``[tag]`` line in the middle of a sentence ("but in" /
     "[chuckles]" / "a tornado.") joins the text before it, so it stays

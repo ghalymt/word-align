@@ -88,6 +88,19 @@ class TestStartsOnWords(Base):
         self.assertEqual(time_to_ms(piece["start"]), 2200)
 
 
+class TestPunctuationLines(Base):
+    def test_closing_quote_line_joins_the_word_before(self):
+        segs = [seg(0, 1000, 'like, "I don\'t--', [w("like,", 0, 400), w('"I', 400, 600),
+                                                   w("don't--", 600, 1000)]),
+                seg(1000, 1130, '"', [w('"', 1000, 1130)]),
+                seg(2200, 2500, '"Okay,', [w('"Okay,', 2200, 2500)])]
+        out = S.attach_punctuation_lines(segs)
+        self.assertEqual([s["text"] for s in out], ['like, "I don\'t--"', '"Okay,'])
+        self.assertEqual(time_to_ms(out[1]["start"]), 2200)
+        self.assertEqual(len(out[0]["words"]), 3)
+        self.assertEqual(segs[0]["words"][-1]["word"], "don't--")      # input untouched
+
+
 class TestReviewLabels(unittest.TestCase):
     def test_recutting_cues_is_not_a_fix(self):
         cues = [{"start": 0.0, "end": 2.0, "text": "one two three"},

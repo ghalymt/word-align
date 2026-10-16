@@ -395,6 +395,7 @@ class PipelineRunner(RobustStagesMixin):
                 message=f"Preserving {len(segments)} cues from input SRT (no re-merging)."))
         else:
             from .. import segment as _seg
+            initial_segments = _seg.attach_punctuation_lines(initial_segments)
             if _seg.SEGMENTER == "sentences":
                 # A sentence at a time: the fewest cues that fit, broken at
                 # punctuation, pauses and clean phrase boundaries.
