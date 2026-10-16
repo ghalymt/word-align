@@ -38,7 +38,7 @@ _language = "en"                      # which line-break rules apply
 # a longer one.
 _sync_starts = True
 _chain_gap_ms = 1200
-_lead_out_ms = 500
+_lead_out_ms = 250
 
 # Second-attempt ratio for the balancer: prefer a slightly uneven split over
 # leaving a line too long, but never force an outright ugly break.
@@ -71,7 +71,7 @@ def set_config(config) -> None:
     _min_cue_ms = int(config.min_cue_ms)
     _sync_starts = bool(getattr(config, "sync_starts", True))
     _chain_gap_ms = int(getattr(config, "chain_gap_ms", 1200))
-    _lead_out_ms = int(getattr(config, "lead_out_ms", 500))
+    _lead_out_ms = int(getattr(config, "lead_out_ms", 250))
 
 
 def set_language(language: Optional[str]) -> str:
@@ -1394,13 +1394,16 @@ def chain_cues(segments: List[Dict], chain_gap_ms: Optional[int] = None,
         if _is_tag(seg):
             continue
         s0, e = _ms(seg, "start"), _ms(seg, "end")
+        # Measure from the last word, so running this twice adds nothing.
+        timed = [w for w in seg.get("words") or [] if w.get("end") is not None]
+        spoken = min(e, int(timed[-1]["end"] * 1000)) if timed else e
         nxt = segs[i + 1] if i + 1 < len(segs) else None
         if nxt is None:
-            e2 = e + lead_out_ms
+            e2 = spoken + lead_out_ms
         else:
             n0 = _ms(nxt, "start")
-            e2 = n0 - OVERLAP_GAP_MS if n0 - e <= chain_gap_ms else min(e + lead_out_ms,
-                                                                     n0 - OVERLAP_GAP_MS)
+            e2 = n0 - OVERLAP_GAP_MS if n0 - spoken <= chain_gap_ms else min(
+                spoken + lead_out_ms, n0 - OVERLAP_GAP_MS)
         e2 = max(e, min(e2, s0 + _max_duration_ms))
         seg["end"] = ms_to_time(e2)
     return segs

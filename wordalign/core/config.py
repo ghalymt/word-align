@@ -24,7 +24,7 @@ class SegmentationConfig:
     # lead_out_ms after a longer pause.
     sync_starts: bool = True
     chain_gap_ms: int = 1200
-    lead_out_ms: int = 500
+    lead_out_ms: int = 250
 
     @property
     def cue_char_budget(self) -> int:
@@ -135,7 +135,7 @@ class PipelineProfile:
                 min_cue_ms=seg.get("min_cue_ms", 700),
                 sync_starts=seg.get("sync_starts", True),
                 chain_gap_ms=seg.get("chain_gap_ms", 1200),
-                lead_out_ms=seg.get("lead_out_ms", 500)),
+                lead_out_ms=seg.get("lead_out_ms", 250)),
             export=ExportConfig(
                 word_srt=export.get("word_srt", True),
                 sentence_srt=export.get("sentence_srt", True),
