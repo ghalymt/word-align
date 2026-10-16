@@ -216,6 +216,9 @@ def break_cost(left: Sequence[str], right: Sequence[str], language: str = "en") 
     cost = 0.0
     if al in _MAIN_VERB_FORMS and (bl in _ARTICLES or bl in _DETERMINERS or _is_number(bl)):
         pass                                          # "have | a different ..."
+    elif al in _DETERMINERS and (bl in _PREPOSITIONS or bl in _CONJUNCTIONS
+                                 or bl in _RELATIVES):
+        pass                                          # a pronoun: "after another | through"
     elif al in NO_LINE_END_EN:
         cost += BAD
     elif al in SOFT_NO_END_EN:

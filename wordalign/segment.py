@@ -140,6 +140,11 @@ def is_protected_phrase(text: str, split_pos: int) -> bool:
     return False
 
 
+# Characters of line-length difference worth one point of break_cost: a
+# clean break is worth a somewhat uneven pair of lines.
+BALANCE_WEIGHT = 0.6
+
+
 def evaluate_split(text: str, pos: int, total_len: int,
                    min_ratio: float = MIN_LINE_RATIO) -> Optional[dict]:
     if is_protected_phrase(text, pos):
@@ -159,7 +164,8 @@ def evaluate_split(text: str, pos: int, total_len: int,
     if l1 < (total_len * min_ratio) or l2 < (total_len * min_ratio):
         return None
     brk = break_cost(line1.split(), line2.split(), _language)
-    return {"pos": pos, "score": abs(l1 - l2) + brk, "brk": brk, "l1": line1, "l2": line2}
+    return {"pos": pos, "score": BALANCE_WEIGHT * abs(l1 - l2) + brk, "brk": brk,
+            "l1": line1, "l2": line2}
 
 
 # A merge is only worth it if the merged cue can break into lines somewhere
@@ -228,15 +234,18 @@ def balance_block_enhanced(text: str) -> str:
     if not stripped:
         return ""
 
-    # An existing, already-valid two-line split is left exactly as it is.
+    # An existing, already-valid two-line split with a clean break is left
+    # exactly as it is.
     if "\n" in stripped and _max_lines >= 2:
         lines = stripped.split("\n")
-        if len(lines) == 2:
+        if len(lines) == 2 and lines[0].strip() and lines[1].strip():
             l1 = count_visible_characters(lines[0])
             l2 = count_visible_characters(lines[1])
             ratio = l1 / (l1 + l2) if (l1 + l2) else 0
             if (l1 <= _max_cpl and l2 <= _max_cpl
-                    and MIN_LINE_RATIO <= ratio <= 1 - MIN_LINE_RATIO):
+                    and MIN_LINE_RATIO <= ratio <= 1 - MIN_LINE_RATIO
+                    and break_cost(lines[0].split(), lines[1].split(), _language)
+                    < CLEAN_BREAK_LIMIT):
                 return stripped
 
     flat = " ".join(stripped.replace("\n", " ").split())
@@ -985,17 +994,19 @@ def _fold_tag(out: List[Dict], segments: List[Dict], j: int, text: str,
     prev = out[-1] if out and not _is_tag(out[-1]) else None
     nxt = segments[j] if j < len(segments) and not _is_tag(segments[j]) else None
     order = [("next", nxt), ("prev", prev)] if prefer_next else [("prev", prev), ("next", nxt)]
-    for side, cue in order:
-        if cue is None:
-            continue
-        joined = f"{_flat(cue['text'])} {text}" if side == "prev" else f"{text} {_flat(cue['text'])}"
-        if _text_fits(joined):
-            new = dict(cue, text=balance_block_enhanced(joined))
-            if side == "prev":
-                out[-1] = new
-            else:
-                segments[j] = new
-            return True
+    for clean in (True, False):
+        for side, cue in order:
+            if cue is None:
+                continue
+            joined = (f"{_flat(cue['text'])} {text}" if side == "prev"
+                      else f"{text} {_flat(cue['text'])}")
+            if _text_fits(joined, clean=clean):
+                new = dict(cue, text=balance_block_enhanced(joined))
+                if side == "prev":
+                    out[-1] = new
+                else:
+                    segments[j] = new
+                return True
     for side, cue in order:
         if cue is None or cue.get("words") is None:
             continue
@@ -1076,14 +1087,14 @@ def place_tag_cues(segments: List[Dict], events=None,
 
 
 # -- on-screen time ----------------------------------------------------------------
-def _can_join(a: Optional[Dict], b: Optional[Dict]) -> bool:
+def _can_join(a: Optional[Dict], b: Optional[Dict], clean: bool = True) -> bool:
     if a is None or b is None or _is_tag(a) or _is_tag(b):
         return False
     if a.get("dash_cue") or b.get("dash_cue") or a.get("speaker") != b.get("speaker"):
         return False
     if max(_ms(a, "end"), _ms(b, "end")) - _ms(a, "start") > _max_duration_ms:
         return False
-    return _text_fits(f"{_flat(a['text'])} {_flat(b['text'])}", clean=True)
+    return _text_fits(f"{_flat(a['text'])} {_flat(b['text'])}", clean=clean)
 
 
 def _join_two(a: Dict, b: Dict) -> Dict:
@@ -1125,6 +1136,43 @@ def _grow(segs: List[Dict], i: int, need: int, max_lead_in: int) -> None:
     seg["start"], seg["end"] = ms_to_time(s2), ms_to_time(e2)
 
 
+# A cue still short of the minimum may take this much from a neighbour's
+# on-screen time (the neighbour shows that much later or ends that much
+# sooner than its words) -- less noticeable than joining unrelated text.
+MAX_BORROW_MS = 250
+
+
+def _borrow(out: List[Dict], segs: List[Dict], i: int, min_ms: int) -> bool:
+    """Lengthen short cue ``segs[i]`` by moving a neighbour's boundary by at
+    most ``MAX_BORROW_MS``, if the neighbour keeps the minimum and a
+    readable speed. *out* holds the cues before it."""
+    seg = segs[i]
+    need = min_ms - _dur(seg)
+    if need <= 0 or need > MAX_BORROW_MS:
+        return need <= 0
+    nxt = segs[i + 1] if i + 1 < len(segs) else None
+    prev = out[-1] if out else None
+    for side, other in (("next", nxt), ("prev", prev)):
+        if other is None or other.get("dash_cue"):
+            continue
+        gap = (_ms(other, "start") - _ms(seg, "end") if side == "next"
+               else _ms(seg, "start") - _ms(other, "end"))
+        if gap > OVERLAP_GAP_MS:
+            continue                      # the free time was already used
+        left = _dur(other) - need
+        chars = len(_flat(other["text"]))
+        if left < min_ms or (not _is_tag(other) and chars * 1000.0 / left > TARGET_CPS):
+            continue
+        if side == "next":
+            seg["end"] = ms_to_time(_ms(seg, "end") + need)
+            other["start"] = ms_to_time(_ms(seg, "end") + OVERLAP_GAP_MS)
+        else:
+            seg["start"] = ms_to_time(_ms(seg, "start") - need)
+            other["end"] = ms_to_time(_ms(seg, "start") - OVERLAP_GAP_MS)
+        return True
+    return False
+
+
 def _extend_short(segs: List[Dict], min_ms: int) -> None:
     for i, seg in enumerate(segs):
         if not _is_tag(seg) and _dur(seg) < min_ms:
@@ -1159,11 +1207,18 @@ def enforce_min_duration(segments: List[Dict],
             continue
         prev = out[-1] if out else None
         nxt = segs[i + 1] if i + 1 < len(segs) else None
+        if _borrow(out, segs, i, min_ms):
+            out.append(seg)
+            i += 1
+            continue
         options = []
-        if _can_join(prev, seg):
-            options.append((_ms(seg, "start") - _ms(prev, "end"), 0, "prev"))
-        if _can_join(seg, nxt):
-            options.append((_ms(nxt, "start") - _ms(seg, "end"), 1, "next"))
+        for clean in (True, False):
+            if _can_join(prev, seg, clean):
+                options.append((_ms(seg, "start") - _ms(prev, "end"), 0, "prev"))
+            if _can_join(seg, nxt, clean):
+                options.append((_ms(nxt, "start") - _ms(seg, "end"), 1, "next"))
+            if options:
+                break
         if options:
             side = min(options)[2]
             if side == "prev":
@@ -1184,11 +1239,16 @@ def enforce_min_duration(segments: List[Dict],
     return out
 
 
-def _resplit_pair(a: Dict, b: Dict) -> Optional[Tuple[Dict, Dict]]:
-    """Move the boundary between neighbouring cues *a* and *b* to another
-    word when that evens out their reading speed. Times follow the words, so
-    sync is kept; the new break must be as clean as the old one or clean
-    enough (below ``CLEAN_BREAK_LIMIT``), and both cues must still fit."""
+def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict, Dict]]:
+    """Move the boundary between neighbouring cues *a* and *b* to another word.
+
+    ``mode="speed"``: when that evens out their reading speed; the new break
+    must be as clean as the old one or clean enough (below
+    ``CLEAN_BREAK_LIMIT``). ``mode="break"``: when the old boundary splits
+    words that belong together and a cleaner one does not make either cue
+    read too fast. Times follow the words, so sync is kept, and both cues
+    must still fit the layout and duration limits.
+    """
     if _is_tag(a) or _is_tag(b) or a.get("dash_cue") or b.get("dash_cue"):
         return None
     if a.get("speaker") != b.get("speaker") or a.get("words") is None or b.get("words") is None:
@@ -1214,7 +1274,10 @@ def _resplit_pair(a: Dict, b: Dict) -> Optional[Tuple[Dict, Dict]]:
         if last.get("end") is None or first.get("start") is None:
             continue
         brk = break_cost(tokens[max(0, k - 3):k], tokens[k:k + 3], _language)
-        if brk >= CLEAN_BREAK_LIMIT and brk > old_brk:
+        if mode == "break":
+            if brk >= CLEAN_BREAK_LIMIT or brk > old_brk - 5:
+                continue
+        elif brk >= CLEAN_BREAK_LIMIT and brk > old_brk:
             continue
         left, right = " ".join(tokens[:k]), " ".join(tokens[k:])
         a_end = max(int(last["end"] * 1000), int(first["start"] * 1000) - OVERLAP_GAP_MS)
@@ -1224,11 +1287,16 @@ def _resplit_pair(a: Dict, b: Dict) -> Optional[Tuple[Dict, Dict]]:
             continue
         new_max = max(len(left) * 1000.0 / (a_end - start),
                       len(right) * 1000.0 / (end - b_start))
-        if new_max > old_max - 1.0:
-            continue
+        if mode == "break":
+            if new_max > max(old_max, TARGET_CPS) + 0.5:
+                continue
+            score = brk + 0.5 * max(0.0, new_max - TARGET_CPS) + 0.2 * abs(k - len(ta))
+        else:
+            if new_max > old_max - 1.0:
+                continue
+            score = new_max + 0.2 * max(0.0, brk - old_brk)
         if not (_text_fits(left, clean=True) and _text_fits(right, clean=True)):
             continue
-        score = new_max + 0.2 * max(0.0, brk - old_brk)
         if best is None or score < best[0]:
             best = (score, k, a_end, b_start)
     if best is None:
@@ -1261,6 +1329,28 @@ def _resplit_fast(segs: List[Dict], target_cps: float) -> int:
             segs[j], segs[j + 1] = pair
             moved += 1
     return moved
+
+
+def repair_cue_breaks(segments: List[Dict]) -> List[Dict]:
+    """Move cue boundaries that split words that belong together ("about |
+    the workplace", "it would | come in") to a cleaner word nearby, where
+    the cues still fit and read at a comfortable speed."""
+    segs = [dict(s) for s in segments]
+    moved = 0
+    for i in range(len(segs) - 1):
+        a, b = segs[i], segs[i + 1]
+        if _is_tag(a) or _is_tag(b) or _ms(b, "start") - _ms(a, "end") > 300:
+            continue                      # a pause is a fine place to change cue
+        ta, tb = _flat(a["text"]).split(), _flat(b["text"]).split()
+        if not ta or not tb or break_cost(ta[-3:], tb[:3], _language) < CLEAN_BREAK_LIMIT:
+            continue
+        pair = _resplit_pair(a, b, mode="break")
+        if pair:
+            segs[i], segs[i + 1] = pair
+            moved += 1
+    if moved:
+        print(f"[ok] Moved {moved} cue boundary(ies) to a cleaner break")
+    return segs
 
 
 def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,

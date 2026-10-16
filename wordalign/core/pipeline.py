@@ -28,7 +28,7 @@ from ..config import PipelineConfig
 from ..ensemble import build_consensus, consensus_to_structured_text
 from ..segment import (enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
-                       place_tag_cues, relieve_fast_cues,
+                       place_tag_cues, relieve_fast_cues, repair_cue_breaks,
                        resolve_overlaps, run_iterative_merging,
                        set_config, set_language, split_long_segments,
                        validate_srt_output, balance_block_enhanced)
@@ -382,6 +382,7 @@ class PipelineRunner(RobustStagesMixin):
                                       min_ms=seg_cfg.min_cue_ms)
             segments = resolve_overlaps(segments)
             segments = enforce_min_duration(segments, seg_cfg.min_cue_ms)
+            segments = repair_cue_breaks(segments)
             segments = relieve_fast_cues(segments)
             segments = resolve_overlaps(segments)
         return segments
