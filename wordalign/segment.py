@@ -1501,6 +1501,11 @@ def _extend_short(segs: List[Dict], min_ms: int) -> None:
             _grow(segs, i, min_ms - _dur(seg), max_lead_in=lead_in)
 
 
+# In sync mode a short cue keeps its own place (its words are just short),
+# unless it would flash by in under this many ms.
+SYNC_JOIN_BELOW_MS = 200
+
+
 def enforce_min_duration(segments: List[Dict],
                          min_ms: int = None) -> List[Dict]:
     """Guarantee a readable minimum duration for every cue.
@@ -1534,7 +1539,8 @@ def enforce_min_duration(segments: List[Dict],
             i += 1
             continue
         options = []
-        for clean in ((True, False) if not _sync_starts or _dur(seg) < min_ms // 3 else ()):
+        tiny = min(min_ms // 3, SYNC_JOIN_BELOW_MS) if _sync_starts else min_ms
+        for clean in ((True, False) if _dur(seg) < tiny else ()):
             if _can_join(prev, seg, clean):
                 options.append((_ms(seg, "start") - _ms(prev, "end"), 0, "prev"))
             if _can_join(seg, nxt, clean):
@@ -1548,7 +1554,7 @@ def enforce_min_duration(segments: List[Dict],
             else:
                 segs[i + 1] = _join_two(seg, nxt)
             merged += 1
-        elif (prev is not None and not _is_tag(prev) and _dur(seg) < min_ms // 3
+        elif (prev is not None and not _is_tag(prev) and _dur(seg) < min(min_ms // 3, tiny)
               and prev.get("speaker") == seg.get("speaker")):
             out[-1] = _join_two(prev, seg)
             merged += 1
@@ -1559,6 +1565,12 @@ def enforce_min_duration(segments: List[Dict],
     if merged:
         print(f"[ok] Joined {merged} short cue(s) with a neighbour")
     return out
+
+
+def _inner_sentence_end(text: str) -> int:
+    """How many sentences end inside *text* (not counting its last word)."""
+    toks = _tokenize(text)[:-1]
+    return sum(1 for t in toks if has_terminal_punctuation(t))
 
 
 def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict, Dict]]:
@@ -1602,6 +1614,9 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
         elif brk >= CLEAN_BREAK_LIMIT and brk > old_brk:
             continue
         left, right = " ".join(tokens[:k]), " ".join(tokens[k:])
+        if (_inner_sentence_end(left) > _inner_sentence_end(a["text"])
+                or _inner_sentence_end(right) > _inner_sentence_end(b["text"])):
+            continue                      # never pull another sentence into a cue
         a_end = max(int(last["end"] * 1000), int(first["start"] * 1000) - OVERLAP_GAP_MS)
         b_start = max(int(first["start"] * 1000), a_end + OVERLAP_GAP_MS)
         if min(a_end - start, end - b_start) < _min_cue_ms \
@@ -1662,11 +1677,15 @@ def repair_cue_breaks(segments: List[Dict]) -> List[Dict]:
     moved = 0
     for i in range(len(segs) - 1):
         a, b = segs[i], segs[i + 1]
-        if _is_tag(a) or _is_tag(b) or _ms(b, "start") - _ms(a, "end") > 300:
+        if _is_tag(a) or _is_tag(b) or not a.get("words") or not b.get("words"):
+            continue
+        last, first = a["words"][-1], b["words"][0]
+        if last.get("end") is not None and first.get("start") is not None \
+                and (first["start"] - last["end"]) * 1000 > 300:
             continue                      # a pause is a fine place to change cue
         ta, tb = _tokenize(a["text"]), _tokenize(b["text"])
-        if not ta or not tb or break_cost(ta[-3:], tb[:3], _language) < CLEAN_BREAK_LIMIT:
-            continue
+        if not ta or not tb or break_cost(ta[-3:], tb[:3], _language) <= CLAUSE_BREAK:
+            continue                      # already at punctuation
         pair = _resplit_pair(a, b, mode="break")
         if pair:
             segs[i], segs[i + 1] = pair
