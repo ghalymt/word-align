@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.2.1 — unreleased
+
+### Added
+
+- **`<name>_final.srt` on every run** — the deliverable, written after the
+  combined file: every word and every `[tag]` of the transcript in order,
+  within the layout and timing rules, checked when it is written (summary in
+  the log, details under `final_check` in the job manifest, warnings for
+  anything left). See *The final SRT* in the user guide.
+- **GoTranscript line-break rules for English** (`wordalign/linebreak.py`):
+  subject + verb, auxiliaries, phrasal verbs, verb + object pronoun, names
+  and titles, numbers and units stay together; breaks prefer sentence ends,
+  then clause punctuation, then conjunctions and prepositions.
+
+### Changed
+
+- **Sound tags never overlap speech.** The transcript's `[tag]` lines are
+  placed in the pause where the editor put them (timed by a matching sound
+  event, cut back to the pause), or share the neighbouring cue when the pause
+  is too short. `_combined.srt` and `_audio_tags.srt` use the same placement,
+  and an input SRT's tags are kept too.
+- `_sentence_level.srt` (and VTT/ASS) carry the speech only; tags are in the
+  final and combined files. The review queue and `_corrected.srt` follow the
+  final cues.
+- Transcript lines too long for `--max-lines` × `--cpl`, or on screen longer
+  than `--max-duration-ms`, are split at their best break instead of being
+  left as one long line; cues never merge past the duration limit.
+- Short cues grow backwards into the pause before them as well as forwards,
+  then borrow a few ms from a neighbour or join it; fast cues take the free
+  time around them, move a boundary to a better word, or join a neighbour.
+  Every cue keeps at least 1 ms from the next.
+- Cue boundaries that split a phrase are moved to a cleaner word nearby.
+
+### Fixed
+
+- The WhisperX worker finds the alignment model in the models folder or its
+  `hub/` subfolder (it only looked in the first).
+
 ## 2.2.0 — 2026-10-15
 
 Bad audio. A new **robust flow** (`--profile robust`, GUI preset *Robust*)

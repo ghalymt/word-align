@@ -162,12 +162,39 @@ After a successful run, you'll find:
 | File | Contents |
 |---|---|
 | `*_word_level.srt` | One cue per word — maximum precision |
-| `*_sentence_level.srt` | Merged, balanced subtitle cues |
+| `*_sentence_level.srt` | Merged, balanced subtitle cues — speech only |
 | `*_transcript.txt` | Ensemble transcript with timestamps |
 | `*_transcript.docx` | Word transcript with highlighted low-confidence words |
-| `*_audio_tags.srt` | Audio events (laughs, music, etc.) |
+| `*_audio_tags.srt` | Sound tags (laughs, music, etc.) with the time each is on screen (`--tags`) |
+| `*_combined.srt` | Speech and sound tags together (`--tags`) |
+| `*_final.srt` | **The deliverable** — every word and every `[tag]` of the transcript, within the layout and timing rules (2.2.1) |
 | `*_review.json` | Review tiers, reasons and word confidences (2.2) |
-| `*_corrected.srt` | Your corrections from the review queue (GUI) |
+| `*_corrected.srt` | The final SRT with your corrections from the review queue (GUI) |
+
+### The final SRT
+
+`*_final.srt` is written on every run, after the combined file. It holds:
+
+- **every word and every `[tag]`** of the transcript, in the editor's order
+  (a transcript's timecodes and `[END OF AUDIO]` are not tags);
+- at most `--max-lines` lines of `--cpl` characters (spaces and punctuation
+  count), one line whenever the text fits one, line breaks that keep phrases
+  together (subject + verb, auxiliaries, phrasal verbs, names, numbers and
+  units — GoTranscript's rules for English), sound tags at a cue's edge on a
+  line of their own;
+- cues of 1 to 7 s (`--min-cue-ms`, `--max-duration-ms`) with at least
+  1 ms between them and no overlaps; long transcript lines are split at their
+  best break; fast cues use the pause around them (and a little time from a
+  slower neighbour) to stay near 20 characters per second.
+
+**Speech timing always wins.** A tag gets a cue of its own in the pause where
+the transcript puts it, timed by a matching sound event when there is one; an
+event that runs into speech is cut back to that pause. When the pause is too
+short for a 1-second cue, the tag shares the cue before (or after) it. The run
+checks the finished file and prints the result (`Final SRT -> …: all N words
+and M tags present, all rules met, …`); the same report is stored under
+`final_check` in the job manifest, and anything that still breaks a rule is
+listed as a warning.
 
 ---
 
