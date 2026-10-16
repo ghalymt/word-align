@@ -158,8 +158,13 @@ def evaluate_split(text: str, pos: int, total_len: int,
         return None
     if l1 < (total_len * min_ratio) or l2 < (total_len * min_ratio):
         return None
-    score = abs(l1 - l2) + break_cost(line1.split(), line2.split(), _language)
-    return {"pos": pos, "score": score, "l1": line1, "l2": line2}
+    brk = break_cost(line1.split(), line2.split(), _language)
+    return {"pos": pos, "score": abs(l1 - l2) + brk, "brk": brk, "l1": line1, "l2": line2}
+
+
+# A merge is only worth it if the merged cue can break into lines somewhere
+# that keeps words together (break_cost below this; BAD is 15).
+CLEAN_BREAK_LIMIT = 10.0
 
 
 def check_if_text_can_be_split_prettily(text: str) -> bool:
@@ -170,7 +175,10 @@ def check_if_text_can_be_split_prettily(text: str) -> bool:
     if total_len > _cue_char_budget() or _max_lines < 2:
         return False
     for i in range(1, len(text)):
-        if text[i] == " " and evaluate_split(text, i, total_len) is not None:
+        if text[i] != " ":
+            continue
+        c = evaluate_split(text, i, total_len)
+        if c is not None and c["brk"] < CLEAN_BREAK_LIMIT:
             return True
     return any(_best_multiline_split(text, n) is not None
                for n in range(3, _max_lines + 1))
@@ -793,27 +801,39 @@ def _flat(text: str) -> str:
     return " ".join((text or "").split())
 
 
-_FITS_CACHE: Dict[tuple, bool] = {}
+_LAYOUT_CACHE: Dict[tuple, Tuple[bool, float]] = {}
 
 
-def _text_fits(text: str) -> bool:
-    """Whether *text* lays out in at most ``_max_lines`` lines of ``_max_cpl``."""
+def _layout(text: str) -> Tuple[bool, float]:
+    """(fits, break cost) of *text* laid out by :func:`balance_block_enhanced`:
+    whether it fits ``_max_lines`` lines of ``_max_cpl``, and the
+    :func:`break_cost` of its line breaks (0 for one line)."""
     flat = _flat(text)
     n = count_visible_characters(flat)
     if n <= _max_cpl:
-        return True
+        return True, 0.0
     if n > _cue_char_budget() or _max_lines < 2:
-        return False
+        return False, 0.0
     key = (flat, _max_cpl, _max_lines, _language)
-    hit = _FITS_CACHE.get(key)
+    hit = _LAYOUT_CACHE.get(key)
     if hit is None:
         lines = balance_block_enhanced(flat).split("\n")
-        hit = len(lines) <= _max_lines and all(
+        fits = len(lines) <= _max_lines and all(
             count_visible_characters(line) <= _max_cpl for line in lines)
-        if len(_FITS_CACHE) > 50_000:
-            _FITS_CACHE.clear()
-        _FITS_CACHE[key] = hit
+        cost = sum(break_cost(a.split(), b.split(), _language)
+                   for a, b in zip(lines, lines[1:]))
+        hit = (fits, cost)
+        if len(_LAYOUT_CACHE) > 50_000:
+            _LAYOUT_CACHE.clear()
+        _LAYOUT_CACHE[key] = hit
     return hit
+
+
+def _text_fits(text: str, clean: bool = False) -> bool:
+    """Whether *text* lays out in at most ``_max_lines`` lines of ``_max_cpl``
+    (*clean*: with line breaks that keep words together)."""
+    fits, cost = _layout(text)
+    return fits and (not clean or cost < CLEAN_BREAK_LIMIT)
 
 
 def _cps(seg: Dict) -> float:
@@ -883,10 +903,10 @@ def _split_segment(seg: Dict) -> List[Dict]:
             if wb == wa:
                 continue                      # a cue needs a word
             span = span_ms(wa, wb)
-            if wb - wa > 1 and (span > _max_duration_ms
-                                or not _text_fits(" ".join(tokens[a:b]))):
+            fits, layout_cost = _layout(" ".join(tokens[a:b]))
+            if wb - wa > 1 and (span > _max_duration_ms or not fits):
                 continue
-            cost = best[a] + PIECE_COST
+            cost = best[a] + PIECE_COST + max(0.0, layout_cost)
             if width < SHORT_PIECE_CHARS:
                 cost += SHORT_PIECE_CHARS - width
             if span < _min_cue_ms:
@@ -1063,7 +1083,7 @@ def _can_join(a: Optional[Dict], b: Optional[Dict]) -> bool:
         return False
     if max(_ms(a, "end"), _ms(b, "end")) - _ms(a, "start") > _max_duration_ms:
         return False
-    return _text_fits(f"{_flat(a['text'])} {_flat(b['text'])}")
+    return _text_fits(f"{_flat(a['text'])} {_flat(b['text'])}", clean=True)
 
 
 def _join_two(a: Dict, b: Dict) -> Dict:
@@ -1082,13 +1102,26 @@ def _grow(segs: List[Dict], i: int, need: int, max_lead_in: int) -> None:
     seg = segs[i]
     s, e = _ms(seg, "start"), _ms(seg, "end")
     limit = s + _max_duration_ms
-    ceiling = _ms(segs[i + 1], "start") - OVERLAP_GAP_MS if i + 1 < len(segs) else e + need
+    nxt = segs[i + 1] if i + 1 < len(segs) else None
+    prev = segs[i - 1] if i > 0 else None
+    if nxt is None:
+        ceiling = e + need
+    else:
+        ceiling = _ms(nxt, "start") - OVERLAP_GAP_MS
+        if _is_tag(nxt):      # a [tag] cue may start later, down to its minimum
+            ceiling = max(ceiling, _ms(nxt, "end") - _min_cue_ms - OVERLAP_GAP_MS)
     e2 = max(e, min(e + need, ceiling, limit))
+    if nxt is not None and e2 + OVERLAP_GAP_MS > _ms(nxt, "start"):
+        nxt["start"] = ms_to_time(e2 + OVERLAP_GAP_MS)
     need -= e2 - e
     s2 = s
     if need > 0:
-        floor = _ms(segs[i - 1], "end") + OVERLAP_GAP_MS if i > 0 else 0
+        floor = _ms(prev, "end") + OVERLAP_GAP_MS if prev is not None else 0
+        if prev is not None and _is_tag(prev):
+            floor = min(floor, _ms(prev, "start") + _min_cue_ms + OVERLAP_GAP_MS)
         s2 = min(s, max(s - need, s - max_lead_in, floor, e2 - _max_duration_ms))
+        if prev is not None and s2 - OVERLAP_GAP_MS < _ms(prev, "end"):
+            prev["end"] = ms_to_time(s2 - OVERLAP_GAP_MS)
     seg["start"], seg["end"] = ms_to_time(s2), ms_to_time(e2)
 
 
@@ -1151,6 +1184,85 @@ def enforce_min_duration(segments: List[Dict],
     return out
 
 
+def _resplit_pair(a: Dict, b: Dict) -> Optional[Tuple[Dict, Dict]]:
+    """Move the boundary between neighbouring cues *a* and *b* to another
+    word when that evens out their reading speed. Times follow the words, so
+    sync is kept; the new break must be as clean as the old one or clean
+    enough (below ``CLEAN_BREAK_LIMIT``), and both cues must still fit."""
+    if _is_tag(a) or _is_tag(b) or a.get("dash_cue") or b.get("dash_cue"):
+        return None
+    if a.get("speaker") != b.get("speaker") or a.get("words") is None or b.get("words") is None:
+        return None
+    ta, tb = _flat(a["text"]).split(), _flat(b["text"]).split()
+    tokens = ta + tb
+    words = list(a["words"]) + list(b["words"])
+    is_word = _token_is_word(tokens)
+    if sum(is_word) != len(words) or len(words) < 2:
+        return None
+    cum = [0]
+    for flag in is_word:
+        cum.append(cum[-1] + (1 if flag else 0))
+    start, end = _ms(a, "start"), _ms(b, "end")
+    old_max = max(_cps(a), _cps(b))
+    old_brk = break_cost(ta[-3:], tb[:3], _language)
+    best = None
+    for k in range(1, len(tokens)):
+        wa = cum[k]
+        if k == len(ta) or wa == 0 or wa == len(words):
+            continue
+        last, first = words[wa - 1], words[wa]
+        if last.get("end") is None or first.get("start") is None:
+            continue
+        brk = break_cost(tokens[max(0, k - 3):k], tokens[k:k + 3], _language)
+        if brk >= CLEAN_BREAK_LIMIT and brk > old_brk:
+            continue
+        left, right = " ".join(tokens[:k]), " ".join(tokens[k:])
+        a_end = max(int(last["end"] * 1000), int(first["start"] * 1000) - OVERLAP_GAP_MS)
+        b_start = max(int(first["start"] * 1000), a_end + OVERLAP_GAP_MS)
+        if min(a_end - start, end - b_start) < _min_cue_ms \
+                or max(a_end - start, end - b_start) > _max_duration_ms:
+            continue
+        new_max = max(len(left) * 1000.0 / (a_end - start),
+                      len(right) * 1000.0 / (end - b_start))
+        if new_max > old_max - 1.0:
+            continue
+        if not (_text_fits(left, clean=True) and _text_fits(right, clean=True)):
+            continue
+        score = new_max + 0.2 * max(0.0, brk - old_brk)
+        if best is None or score < best[0]:
+            best = (score, k, a_end, b_start)
+    if best is None:
+        return None
+    _, k, a_end, b_start = best
+    wa = cum[k]
+    new_a = dict(a, text=balance_block_enhanced(" ".join(tokens[:k])), words=words[:wa],
+                 end=ms_to_time(a_end), end_source=words[wa - 1].get("source"))
+    new_b = dict(b, text=balance_block_enhanced(" ".join(tokens[k:])), words=words[wa:],
+                 start=ms_to_time(b_start), start_source=words[wa].get("source"))
+    return new_a, new_b
+
+
+def _resplit_fast(segs: List[Dict], target_cps: float) -> int:
+    moved = 0
+    for i in range(len(segs)):
+        if _is_tag(segs[i]) or _cps(segs[i]) <= target_cps:
+            continue
+        options = []
+        if i + 1 < len(segs):
+            pair = _resplit_pair(segs[i], segs[i + 1])
+            if pair:
+                options.append((max(map(_cps, pair)), i, pair))
+        if i > 0:
+            pair = _resplit_pair(segs[i - 1], segs[i])
+            if pair:
+                options.append((max(map(_cps, pair)), i - 1, pair))
+        if options:
+            _, j, pair = min(options, key=lambda o: o[0])
+            segs[j], segs[j + 1] = pair
+            moved += 1
+    return moved
+
+
 def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
                       max_cps: float = MAX_CPS) -> List[Dict]:
     """Slow down cues that read faster than *target_cps*.
@@ -1172,6 +1284,8 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
             if need > 0:
                 _grow(cues, i, need, MAX_LEAD_IN_MS)
 
+    ease(segs)
+    moved = _resplit_fast(segs, target_cps)
     ease(segs)
     out: List[Dict] = []
     merged = 0
@@ -1205,6 +1319,8 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
             merged += 1
         i += 1
     ease(out)
+    if moved:
+        print(f"[ok] Moved {moved} cue boundary(ies) to even out reading speed")
     if merged:
         print(f"[ok] Joined {merged} fast cue(s) with a neighbour")
     return out

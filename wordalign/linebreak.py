@@ -68,6 +68,8 @@ _AUXILIARIES = {
     "let's",
 }
 _SUBJECTS = {"i", "we", "they", "he", "she"}
+# Auxiliaries that are the main verb when an object follows ("have a").
+_MAIN_VERB_FORMS = {"have", "has", "had", "having", "do", "does", "did"}
 _DETERMINERS = {
     "my", "your", "his", "our", "their", "its", "this", "these", "those",
     "some", "any", "every", "each", "no", "another", "such", "both", "either",
@@ -212,7 +214,9 @@ def break_cost(left: Sequence[str], right: Sequence[str], language: str = "en") 
         return cost
 
     cost = 0.0
-    if al in NO_LINE_END_EN:
+    if al in _MAIN_VERB_FORMS and (bl in _ARTICLES or bl in _DETERMINERS or _is_number(bl)):
+        pass                                          # "have | a different ..."
+    elif al in NO_LINE_END_EN:
         cost += BAD
     elif al in SOFT_NO_END_EN:
         cost += SOFT_BAD
