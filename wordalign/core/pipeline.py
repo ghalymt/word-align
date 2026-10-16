@@ -33,6 +33,7 @@ from ..segment import (enforce_min_duration,
                        repair_cue_breaks, speech_only,
                        resolve_overlaps, run_iterative_merging,
                        set_config, set_language, split_long_segments, split_unclean_cues,
+                       inline_mid_sentence_tags,
                        validate_srt_output, balance_block_enhanced)
 
 from ..utils import (detect_language, extract_tags_from_transcript,
@@ -395,7 +396,8 @@ class PipelineRunner(RobustStagesMixin):
             else:
                 # The transcript's lines, merged up to sentence ends within
                 # the layout; lines too long for a cue are split first.
-                segments = split_long_segments(initial_segments)
+                segments = inline_mid_sentence_tags(initial_segments)
+                segments = split_long_segments(segments)
                 segments = run_iterative_merging(segments)
                 segments = split_long_segments(segments)
             segments = split_unclean_cues(segments)

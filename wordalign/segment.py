@@ -1160,6 +1160,21 @@ def _clean_halves(seg: Dict) -> Optional[List[Dict]]:
     return pieces
 
 
+def inline_mid_sentence_tags(segments: List[Dict]) -> List[Dict]:
+    """A transcript ``[tag]`` line in the middle of a sentence ("but in" /
+    "[chuckles]" / "a tornado.") joins the text before it, so it stays
+    inline where the editor put it; tags between sentences stay separate."""
+    out: List[Dict] = []
+    for seg in segments:
+        prev = out[-1] if out else None
+        if (seg.get("tag") and prev is not None and not prev.get("tag")
+                and not has_terminal_punctuation(prev["text"])):
+            out[-1] = dict(prev, text=f"{_flat(prev['text'])} {_flat(seg['text'])}")
+            continue
+        out.append(seg)
+    return out
+
+
 def split_long_segments(segments: List[Dict]) -> List[Dict]:
     """Split cues that cannot fit ``_max_lines`` x ``_max_cpl`` or stay on
     screen longer than ``_max_duration_ms`` -- a long transcript line, say --
@@ -1570,6 +1585,13 @@ def enforce_min_duration(segments: List[Dict],
     return out
 
 
+def _ends_sentence(tokens: List[str]) -> bool:
+    """Whether the last word (ignoring trailing ``[tags]``) ends a sentence."""
+    words = [t for t in tokens if not _TAGS_ONLY_RE.match(t)]
+    return bool(words) and has_terminal_punctuation(words[-1]) \
+        and not ends_with_nonterminal_abbreviation(words[-1])
+
+
 def _inner_sentence_end(text: str) -> int:
     """How many sentences end inside *text* (not counting its last word)."""
     toks = _tokenize(text)[:-1]
@@ -1602,6 +1624,8 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
     start, end = _ms(a, "start"), _ms(b, "end")
     old_max = max(_cps(a), _cps(b))
     old_brk = break_cost(ta[-3:], tb[:3], _language)
+    if _ends_sentence(ta):
+        return None                      # a sentence end is where cues should change
     best = None
     for k in range(1, len(tokens)):
         wa = cum[k]
