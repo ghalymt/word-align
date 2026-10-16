@@ -97,9 +97,17 @@ docs/benchmark.md).
 - Qwen chunks that ran out of GPU memory are split and retried; pieces that
   still fail are reported instead of being silently empty.
 - WhisperX finds its venv through the same lookup as the other backends.
-- `--doctor` starts MFA instead of only finding it, so a pip install of MFA
-  without its native `kalpy` module is reported (install MFA from
-  conda-forge).
+- MFA from a conda environment (the bundled `venvs\mfa`, `WORDALIGN_MFA`, or
+  `aligner`/`mfa` under your conda folders) is now preferred over an `mfa`
+  on PATH, and is run as if activated: its DLL folders on PATH and the user
+  site-packages ignored. A pip-installed MFA in the user site-packages (no
+  `kalpy` on Windows) used to win and fail on every run.
+- `--doctor` starts MFA the same way instead of only finding it, so a
+  broken MFA is reported.
+- MFA only fills words that have no time; a word already timed by an engine,
+  the aligner or a voter is no longer re-aligned (and overwritten). Each gap
+  is aligned with three timed words of context on each side, which fixed
+  gap words being pinned to the start of their slice (0.5 s early).
 - A forced-aligned word no longer vanishes from the word-level SRT when the
   aligner gives it no length.
 

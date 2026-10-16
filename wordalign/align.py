@@ -65,21 +65,118 @@ def match_timestamps(aligned_words: List[Dict], source_words: List[Dict],
     return {"matched": count, "total": len(aligned_words), "percentage": pct}
 
 
+MFA_CONTEXT_WORDS = 3     # timed words on each side of a gap, aligned with it
+MFA_PADDING_S = 0.25
+
+
+def plan_mfa_chunks(aligned_words: List[Dict], audio_duration: float,
+                    context: int = MFA_CONTEXT_WORDS,
+                    padding: float = MFA_PADDING_S) -> List[Dict]:
+    """Audio slices for the runs of words that have no time.
+
+    Each run is aligned together with up to *context* timed words on each
+    side: a slice that starts at the previous word's end gives the aligner
+    no speech to lock onto, and it pins the first word to the slice edge.
+    Runs whose context overlaps share one slice. Only the run's own words
+    take the new times.
+    """
+    n = len(aligned_words)
+
+    def untimed(i: int) -> bool:
+        w = aligned_words[i]
+        return w.get("start") is None or w.get("end") is None
+
+    chunks: List[Dict] = []
+    i = 0
+    while i < n:
+        if not untimed(i):
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and untimed(j + 1):
+            j += 1
+        lo, hi = max(0, i - context), min(n - 1, j + context)
+        if chunks and lo <= chunks[-1]["hi"]:
+            chunks[-1]["hi"] = hi
+            chunks[-1]["gap"].extend(range(i, j + 1))
+        else:
+            chunks.append({"lo": lo, "hi": hi, "gap": list(range(i, j + 1))})
+        i = j + 1
+    out: List[Dict] = []
+    for c in chunks:
+        lo, hi = c["lo"], c["hi"]
+        # Context words are timed; a chunk that starts or ends with a gap
+        # word reaches to the neighbouring timed word or the file edge.
+        k = lo
+        while k <= hi and untimed(k):
+            k += 1
+        if lo in c["gap"]:
+            prev = lo - 1
+            while prev >= 0 and untimed(prev):
+                prev -= 1
+            start = float(aligned_words[prev]["end"]) if prev >= 0 else 0.0
+        else:
+            start = float(aligned_words[lo]["start"])
+        if hi in c["gap"]:
+            nxt = hi + 1
+            while nxt < n and untimed(nxt):
+                nxt += 1
+            end = float(aligned_words[nxt]["start"]) if nxt < n else audio_duration
+        else:
+            end = float(aligned_words[hi]["end"])
+        chunk_start = max(0.0, start - padding)
+        chunk_end = min(audio_duration, end + padding) if audio_duration else end + padding
+        if chunk_end <= chunk_start:
+            continue
+        indices = list(range(lo, hi + 1))
+        out.append({
+            "filename": f"gap_{c['gap'][0]}_{c['gap'][-1]}",
+            "text": " ".join(aligned_words[x]["word"] for x in indices),
+            "start_offset": chunk_start,
+            "end_offset": chunk_end,
+            "word_indices": indices,
+            "gap_indices": c["gap"],
+        })
+    return out
+
+
+def apply_mfa_intervals(aligned_words: List[Dict], chunk: Dict, intervals) -> int:
+    """Copy MFA word times onto the chunk's gap words; returns how many.
+
+    MFA's words are matched to ours by text, so a word MFA splits or drops
+    costs only that word, not the whole chunk.
+    """
+    indices = chunk["word_indices"]
+    gap = set(chunk.get("gap_indices", indices))
+    ours = [normalize_word(aligned_words[i]["word"]) for i in indices]
+    marks = [normalize_word(iv.mark) for iv in intervals]
+    sm = SequenceMatcher(None, ours, marks, autojunk=False)
+    updated = 0
+    for blk in sm.get_matching_blocks():
+        for k in range(blk.size):
+            idx = indices[blk.a + k]
+            if idx not in gap:
+                continue
+            iv = intervals[blk.b + k]
+            aligned_words[idx].update({
+                "start": chunk["start_offset"] + iv.minTime,
+                "end": chunk["start_offset"] + iv.maxTime,
+                "matched": True,
+                "source": "MFA",
+            })
+            updated += 1
+    return updated
+
+
 def run_mfa_on_gaps(aligned_words: List[Dict], audio_path: str,
                     mfa_wrapper: MFAWrapper) -> None:
-    """Force-align only the contiguous runs of unmatched words."""
+    """Force-align the runs of words that have no time.
+
+    A word that already has a start and end (from an engine, the forced
+    aligner or a voter) is never re-timed here; it only serves as context.
+    """
     print("\n" + "=" * 60 + "\nRUNNING MFA ON MISSING TIMESTAMPS (SURGICAL MODE)")
-    gaps: List[List[int]] = []
-    current_gap: List[int] = []
-    for i, word in enumerate(aligned_words):
-        if not word.get("matched", False):
-            current_gap.append(i)
-        elif current_gap:
-            gaps.append(current_gap)
-            current_gap = []
-    if current_gap:
-        gaps.append(current_gap)
-    if not gaps:
+    if not any(w.get("start") is None or w.get("end") is None for w in aligned_words):
         print("[ok] No gaps to align with MFA.")
         return
     missing = mfa_wrapper.missing_models()
@@ -88,32 +185,11 @@ def run_mfa_on_gaps(aligned_words: List[Dict], audio_path: str,
         print(f"[warn] MFA skipped: {', '.join(missing)} not installed "
               f"(mfa model download acoustic|g2p <name>).")
         return
-    print(f"Found {len(gaps)} gaps covering "
-          f"{sum(len(g) for g in gaps)} words.")
-
-    chunks_metadata: List[Dict] = []
-    padding = 0.25
-    audio_duration = get_audio_duration(audio_path)
-    for gap_indices in gaps:
-        first_idx, last_idx = gap_indices[0], gap_indices[-1]
-        start_time = (aligned_words[first_idx - 1].get("end", 0.0)
-                      if first_idx > 0 else 0.0)
-        end_time = (aligned_words[last_idx + 1].get("start", audio_duration)
-                    if last_idx < len(aligned_words) - 1 else audio_duration)
-        chunk_start = max(0, start_time - padding)
-        chunk_end = end_time + padding
-        if chunk_end <= chunk_start:
-            continue
-        text = " ".join(aligned_words[i]["word"] for i in gap_indices)
-        chunks_metadata.append({
-            "filename": f"gap_{first_idx}_{last_idx}",
-            "text": text,
-            "start_offset": chunk_start,
-            "end_offset": chunk_end,
-            "word_indices": gap_indices,
-        })
+    chunks_metadata = plan_mfa_chunks(aligned_words, get_audio_duration(audio_path))
     if not chunks_metadata:
         return
+    print(f"Found {len(chunks_metadata)} gap(s) covering "
+          f"{sum(len(c['gap_indices']) for c in chunks_metadata)} words.")
 
     print(f"Extracting {len(chunks_metadata)} audio slices for MFA...")
     mfa_wrapper.corpus_dir.mkdir(parents=True, exist_ok=True)
@@ -139,17 +215,8 @@ def run_mfa_on_gaps(aligned_words: List[Dict], audio_path: str,
             try:
                 tg = textgrid.TextGrid.fromFile(str(tg_path))
                 word_tier = tg.getFirst("words")
-                mfa_intervals = [i for i in word_tier if i.mark]
-                indices = chunk["word_indices"]
-                if len(mfa_intervals) == len(indices):
-                    for idx, interval in zip(indices, mfa_intervals):
-                        aligned_words[idx].update({
-                            "start": chunk["start_offset"] + interval.minTime,
-                            "end": chunk["start_offset"] + interval.maxTime,
-                            "matched": True,
-                            "source": "MFA",
-                        })
-                        updated_count += 1
+                updated_count += apply_mfa_intervals(
+                    aligned_words, chunk, [i for i in word_tier if i.mark])
             except Exception as exc:
                 print(f"[warn] Failed to parse TextGrid {tg_path}: {exc}")
         print(f"[ok] MFA force-aligned {updated_count} words.")

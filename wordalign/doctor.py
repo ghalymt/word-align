@@ -10,7 +10,7 @@ def _hub_has(hub: str, repo: str) -> bool:
     return bool(hub) and os.path.isdir(os.path.join(hub, "models--" + repo.replace("/", "--")))
 
 
-def _mfa_status(mfa) -> Tuple[bool, str]:
+def _mfa_status(mfa, env=None) -> Tuple[bool, str]:
     """Does MFA actually start? A pip install without its native ``_kalpy``
     module is found on PATH but fails on every run."""
     if not mfa:
@@ -20,7 +20,8 @@ def _mfa_status(mfa) -> Tuple[bool, str]:
     import subprocess
     try:
         done = subprocess.run([mfa, "version"], capture_output=True, text=True,
-                              timeout=120, encoding="utf-8", errors="replace")
+                              timeout=120, encoding="utf-8", errors="replace",
+                              env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"{mfa} does not start ({exc})"
     if done.returncode == 0:
@@ -28,8 +29,8 @@ def _mfa_status(mfa) -> Tuple[bool, str]:
         return True, f"{mfa} ({lines[-1]})" if lines else mfa
     tail = [line.strip() for line in (done.stderr or done.stdout or "").splitlines() if line.strip()]
     why = tail[-1] if tail else f"exit {done.returncode}"
-    hint = (" -- reinstall from conda-forge (the pip package lacks kalpy)"
-            if "kalpy" in why else "")
+    hint = (" -- use MFA from conda-forge and set WORDALIGN_MFA to that environment "
+            "(a pip install lacks kalpy)" if "kalpy" in why else "")
     return False, f"{mfa} does not start: {why}{hint}"
 
 
@@ -84,8 +85,9 @@ def collect() -> List[Tuple[str, str, bool, str]]:
     add("5 timing", "Qwen3-ForcedAligner-0.6B",
         backend_python("qwen") and _hub_has(hub, "Qwen/Qwen3-ForcedAligner-0.6B"), "")
     add("5 timing", "Vosk models", mp.vosk_models_dir, mp.vosk_models_dir or "")
-    mfa = os.environ.get("WORDALIGN_MFA") or shutil.which("mfa")
-    mfa_ok, mfa_detail = _mfa_status(mfa)
+    from .engines.mfa_engine import resolve_mfa
+    mfa, mfa_env = resolve_mfa()
+    mfa_ok, mfa_detail = _mfa_status(mfa, mfa_env)
     add("5 timing", "MFA", mfa_ok, mfa_detail)
     return rows
 

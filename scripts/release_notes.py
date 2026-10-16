@@ -43,11 +43,19 @@ def main(argv=None) -> int:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     try:
-        sys.stdout.write(unwrap(release_notes(
-            args[0].lstrip("v"), CHANGELOG.read_text(encoding="utf-8"))))
+        notes = unwrap(release_notes(
+            args[0].lstrip("v"), CHANGELOG.read_text(encoding="utf-8")))
     except KeyError as exc:
         print(f"error: {exc.args[0]}", file=sys.stderr)
         return 1
+    # Always UTF-8: on a Windows runner stdout is cp1252, which cannot
+    # encode characters such as "μ" or "→" in the changelog.
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout.flush()
+        sys.stdout.buffer.write(notes.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    else:
+        sys.stdout.write(notes)
     return 0
 
 
