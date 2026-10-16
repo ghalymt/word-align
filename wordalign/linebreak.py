@@ -68,6 +68,10 @@ _AUXILIARIES = {
     "let's",
 }
 _SUBJECTS = {"i", "we", "they", "he", "she"}
+# "be" forms: before an article or a preposition they are the main verb.
+_COPULAS = {"am", "is", "are", "was", "were", "be", "been", "being", "i'm", "you're",
+            "we're", "they're", "he's", "she's", "it's", "that's", "there's", "here's",
+            "what's", "who's"}
 # Auxiliaries that are the main verb when an object follows ("have a").
 _MAIN_VERB_FORMS = {"have", "has", "had", "having", "do", "does", "did"}
 _DETERMINERS = {
@@ -219,6 +223,9 @@ def break_cost(left: Sequence[str], right: Sequence[str], language: str = "en") 
     elif al in _DETERMINERS and (bl in _PREPOSITIONS or bl in _CONJUNCTIONS
                                  or bl in _RELATIVES):
         pass                                          # a pronoun: "after another | through"
+    elif al in _COPULAS and (bl in _ARTICLES or bl in _DETERMINERS or bl in _PREPOSITIONS
+                             or _is_number(bl)):
+        cost += SOFT_BAD                              # "who's | of a certain kind"
     elif al in NO_LINE_END_EN:
         cost += BAD
     elif al in SOFT_NO_END_EN:

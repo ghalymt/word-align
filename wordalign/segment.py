@@ -1366,7 +1366,8 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
         new_max = max(len(left) * 1000.0 / (a_end - start),
                       len(right) * 1000.0 / (end - b_start))
         if mode == "break":
-            if new_max > max(old_max, TARGET_CPS) + 0.5:
+            # A clean break is worth a little reading speed (never past MAX_CPS).
+            if new_max > min(MAX_CPS, max(old_max, TARGET_CPS) + 3.5):
                 continue
             score = brk + 0.5 * max(0.0, new_max - TARGET_CPS) + 0.2 * abs(k - len(ta))
         else:
