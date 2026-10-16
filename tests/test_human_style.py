@@ -78,6 +78,16 @@ class TestTiming(Base):
         self.assertIsNone(S._resplit_pair(a, b, mode="speed"))
 
 
+class TestStartsOnWords(Base):
+    def test_a_stray_quote_does_not_pull_the_start_early(self):
+        piece = {"text": '" "Okay, fine."', "words": [
+            {"word": '"', "start": 1.0, "end": 1.1},          # guessed time
+            {"word": '"Okay,', "start": 2.2, "end": 2.5},
+            {"word": 'fine."', "start": 2.5, "end": 2.9}]}
+        S._retime(piece)
+        self.assertEqual(time_to_ms(piece["start"]), 2200)
+
+
 class TestReviewLabels(unittest.TestCase):
     def test_recutting_cues_is_not_a_fix(self):
         cues = [{"start": 0.0, "end": 2.0, "text": "one two three"},

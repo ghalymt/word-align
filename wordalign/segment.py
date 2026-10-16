@@ -467,10 +467,17 @@ def _word_tokens(text: str) -> int:
     return sum(_token_is_word(text.split()))
 
 
+def _timed_words(words) -> List[Dict]:
+    """Words with times, leaving out punctuation-only tokens (a stray closing
+    quote) whose times are only guessed -- unless that is all there is."""
+    timed = [w for w in words or [] if w.get("start") is not None and w.get("end") is not None]
+    real = [w for w in timed if normalize_word(w.get("word", ""))]
+    return real or timed
+
+
 def _retime(seg: Dict) -> None:
     """Set a segment's times from the first and last of its timed words."""
-    timed = [w for w in seg.get("words") or []
-             if w.get("start") is not None and w.get("end") is not None]
+    timed = _timed_words(seg.get("words"))
     if not timed:
         return
     seg["start"] = ms_to_time(int(timed[0]["start"] * 1000))
@@ -611,8 +618,8 @@ def parse_human_transcript_to_srt_segments(
                         "words": list(span[a:b]),
                     })
                 continue
-            first_word = aligned_words[pos]
-            last_word = aligned_words[pos + len(words) - 1]
+            real = _timed_words(span) or [aligned_words[pos]]
+            first_word, last_word = real[0], real[-1]
             start = first_word.get("start")
             end = last_word.get("end")
             if start is not None and end is not None:
@@ -1427,7 +1434,7 @@ def chain_cues(segments: List[Dict], chain_gap_ms: Optional[int] = None,
             continue
         s0, e = _ms(seg, "start"), _ms(seg, "end")
         # Measure from the last word, so running this twice adds nothing.
-        timed = [w for w in seg.get("words") or [] if w.get("end") is not None]
+        timed = _timed_words(seg.get("words"))
         spoken = min(e, int(timed[-1]["end"] * 1000)) if timed else e
         nxt = segs[i + 1] if i + 1 < len(segs) else None
         if nxt is None:
