@@ -193,6 +193,18 @@ event when there is one; an event that runs into speech is cut back to that
 pause). A tag inside a sentence stays inline in that sentence's cue, and a tag
 whose pause is under half a second shares the cue before (or after) it.
 
+**What wins when rules collide.** Speech pace can't be controlled, so the
+rules adapt to it, in this order:
+
+1. every word and tag of the transcript, in order;
+2. sync with the audio -- a cue never starts before its first word or after
+   it, and never overlaps the next one;
+3. the layout (`--max-lines` × `--cpl`);
+4. on-screen time and reading speed (`--min-cue-ms`, 7 s, ~20 characters per
+   second): met wherever the pauses allow, and bent where the speaker is
+   simply too fast -- a quick "Okay." between two sentences keeps its short
+   cue rather than showing early or late.
+
 **Timing style.** Cues start with their first word, run on to the next cue
 when the pause between them is up to 1 s (`--chain-gap-ms`), and linger
 250 ms after a longer pause (`--lead-out-ms`). A short sentence such as

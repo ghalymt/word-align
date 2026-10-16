@@ -248,15 +248,32 @@ def test_overlap_resolution_trims_end_and_preserves_start():
     assert out[1]["start"] == "00:00:01,500"      # Vosk start untouched
 
 
-def test_overlap_resolution_never_moves_a_vosk_end():
-    """When the earlier end is Vosk, keep it and push the non-Vosk start."""
-    segs = [
+def _vosk_end_overlap():
+    return [
         {"start": "00:00:00,000", "end": "00:00:02,000",
          "start_source": "Vosk", "end_source": "Vosk", "text": "a"},
         {"start": "00:00:01,500", "end": "00:00:03,000",
          "start_source": "WhisperX", "end_source": "Vosk", "text": "b"},
     ]
-    out = resolve_overlaps(segs)
+
+
+def test_overlap_resolution_keeps_starts_in_sync_mode():
+    """Sync first: the later cue still starts with its words; the end gives way."""
+    out = resolve_overlaps(_vosk_end_overlap())
+    assert out[1]["start"] == "00:00:01,500"
+    assert time_to_ms(out[0]["end"]) < time_to_ms(out[1]["start"])
+
+
+def test_overlap_resolution_never_moves_a_vosk_end_without_sync():
+    """Without sync-first timing, a Vosk end is kept and the start pushed."""
+    from wordalign import segment
+    from wordalign.core.config import SegmentationConfig
+    previous = segment.get_config()
+    segment.set_config(SegmentationConfig(sync_starts=False))
+    try:
+        out = resolve_overlaps(_vosk_end_overlap())
+    finally:
+        segment.set_config(SegmentationConfig(**previous))
     assert out[0]["end"] == "00:00:02,000"        # Vosk end untouched
     assert time_to_ms(out[1]["start"]) >= time_to_ms(out[0]["end"])
 

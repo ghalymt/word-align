@@ -20,7 +20,9 @@
   to 1 s (`--chain-gap-ms`), and linger 250 ms after a longer pause
   (`--lead-out-ms`). A short sentence keeps its own short cue instead of
   being joined to its neighbour; the final check lists those as "kept in
-  sync" rather than as failures.
+  sync" rather than as failures. Sync with the audio comes before the
+  duration and reading-speed rules everywhere: overlap fixes and boundary
+  moves never push a cue's start past its first word.
 - The review queue flags cues next to a sound tag (words under applause or
   laughter are often mistimed). `wordalign-bench fit-triage` also finds a
   finished file named `<name>*reviewed*.srt`, and counts only real fixes

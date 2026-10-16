@@ -136,7 +136,7 @@ def summary_line(report: Dict) -> str:
                  "; ".join(f"{k.replace('_', ' ')}: {v}" for k, v in fails.items()))
     short = report["problems"]["short_in_sync"]["count"]
     if short:
-        parts.append(f"{short} short cue(s) kept in sync with their words")
+        parts.append(f"{short} short cue(s) kept in sync with fast speech")
     cps = report.get("cps")
     if cps:
         parts.append(f"reading speed median {cps['median']} cps, "

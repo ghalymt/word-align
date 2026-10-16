@@ -774,7 +774,8 @@ def _resolve_overlaps_once(segments: List[Dict]) -> int:
       2. Prefer preserving *start* times; they are empirically the most
          accurate anchor. So resolve by trimming the earlier cue's END.
       3. Only when the earlier END is Vosk (must be kept) and the later START
-         is not, push the later START forward instead.
+         is not, push the later START forward instead -- except in sync mode,
+         where a cue never starts after its first word (the end is trimmed).
 
     When a boundary's source is unknown the code falls back to rule 2 (trim the
     end, keep the start), which is already safe. The word-level SRT is never
@@ -800,7 +801,7 @@ def _resolve_overlaps_once(segments: List[Dict]) -> int:
             if new_end < cur_end:
                 cur["end"] = ms_to_time(new_end)
                 fixed += 1
-        elif not start_is_vosk:
+        elif not start_is_vosk and not _sync_starts:
             # Earlier end is Vosk -> keep it; nudge the later start to just
             # after it, without crossing that cue's own end.
             new_start = min(cur_end + OVERLAP_GAP_MS, nxt_end - OVERLAP_GAP_MS)
@@ -1660,8 +1661,13 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
         if (_inner_sentence_end(left) > _inner_sentence_end(a["text"])
                 or _inner_sentence_end(right) > _inner_sentence_end(b["text"])):
             continue                      # never pull another sentence into a cue
-        a_end = max(int(last["end"] * 1000), int(first["start"] * 1000) - OVERLAP_GAP_MS)
-        b_start = max(int(first["start"] * 1000), a_end + OVERLAP_GAP_MS)
+        if _sync_starts:
+            # The next cue starts with its first word, whatever the words before do.
+            b_start = int(first["start"] * 1000)
+            a_end = b_start - OVERLAP_GAP_MS
+        else:
+            a_end = max(int(last["end"] * 1000), int(first["start"] * 1000) - OVERLAP_GAP_MS)
+            b_start = max(int(first["start"] * 1000), a_end + OVERLAP_GAP_MS)
         if min(a_end - start, end - b_start) < _min_cue_ms \
                 or max(a_end - start, end - b_start) > _max_duration_ms:
             continue
