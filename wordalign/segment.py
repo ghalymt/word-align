@@ -168,6 +168,10 @@ def evaluate_split(text: str, pos: int, total_len: int,
             "l1": line1, "l2": line2}
 
 
+# break_cost at punctuation is CLAUSE_END or better; a cue may be split
+# there to avoid a mid-phrase line break.
+CLAUSE_BREAK = -8.0
+
 # A merge is only worth it if the merged cue can break into lines somewhere
 # that keeps words together (break_cost below this; BAD is 15).
 CLEAN_BREAK_LIMIT = 10.0
@@ -940,6 +944,78 @@ def _split_segment(seg: Dict) -> List[Dict]:
     return pieces
 
 
+def split_unclean_cues(segments: List[Dict]) -> List[Dict]:
+    """Split a cue whose only line breaks part words that belong together
+    ("you are | either crazy") into two cues at punctuation or a pause,
+    when both halves lay out cleanly and stay readable."""
+    out: List[Dict] = []
+    split = 0
+    for seg in segments:
+        pieces = None
+        if not _is_tag(seg) and seg.get("words") and len(seg["words"]) > 1:
+            fits, cost = _layout(seg["text"])
+            if fits and cost >= CLEAN_BREAK_LIMIT:
+                pieces = _clean_halves(seg)
+        if pieces:
+            split += 1
+            out.extend(pieces)
+        else:
+            out.append(seg)
+    if split:
+        print(f"[ok] Split {split} cue(s) that could only break mid-phrase")
+    return out
+
+
+def _clean_halves(seg: Dict) -> Optional[List[Dict]]:
+    tokens = _flat(seg["text"]).split()
+    is_word = _token_is_word(tokens)
+    words = seg["words"]
+    if sum(is_word) != len(words):
+        return None
+    cum = [0]
+    for flag in is_word:
+        cum.append(cum[-1] + (1 if flag else 0))
+    own = _cps(seg)
+    best = None
+    for k in range(1, len(tokens)):
+        wa = cum[k]
+        if wa == 0 or wa == len(words):
+            continue
+        last, first = words[wa - 1], words[wa]
+        if last.get("end") is None or first.get("start") is None:
+            continue
+        pause = (first["start"] - last["end"]) * 1000.0
+        brk = break_cost(tokens[max(0, k - 3):k], tokens[k:k + 3], _language)
+        if brk > CLAUSE_BREAK and pause < 300:
+            continue
+        left, right = " ".join(tokens[:k]), " ".join(tokens[k:])
+        if not (_text_fits(left, clean=True) and _text_fits(right, clean=True)):
+            continue
+        a_dur = int(last["end"] * 1000) - _ms(seg, "start")
+        b_dur = _ms(seg, "end") - int(first["start"] * 1000)
+        if min(a_dur, b_dur) < _min_cue_ms * 0.6:
+            continue
+        cps = max(len(left) * 1000.0 / max(a_dur + max(pause, 0), 1),
+                  len(right) * 1000.0 / max(b_dur, 1))
+        if cps > max(TARGET_CPS, own + 2):
+            continue
+        score = brk - min(12.0, max(0.0, pause) / 50.0)
+        if best is None or score < best[0]:
+            best = (score, k)
+    if best is None:
+        return None
+    k = best[1]
+    pieces = []
+    for a, b in ((0, k), (k, len(tokens))):
+        piece = dict(seg, text=balance_block_enhanced(" ".join(tokens[a:b])),
+                     words=words[cum[a]:cum[b]])
+        _retime(piece)
+        pieces.append(piece)
+    pieces[0]["start"], pieces[0]["start_source"] = seg["start"], seg.get("start_source")
+    pieces[1]["end"], pieces[1]["end_source"] = seg["end"], seg.get("end_source")
+    return pieces
+
+
 def split_long_segments(segments: List[Dict]) -> List[Dict]:
     """Split cues that cannot fit ``_max_lines`` x ``_max_cpl`` or stay on
     screen longer than ``_max_duration_ms`` -- a long transcript line, say --
@@ -1161,7 +1237,9 @@ def _borrow(out: List[Dict], segs: List[Dict], i: int, min_ms: int) -> bool:
             continue                      # the free time was already used
         left = _dur(other) - need
         chars = len(_flat(other["text"]))
-        if left < min_ms or (not _is_tag(other) and chars * 1000.0 / left > TARGET_CPS):
+        too_fast = (not _is_tag(other) and need > 50
+                    and chars * 1000.0 / left > TARGET_CPS)
+        if left < min_ms or too_fast:
             continue
         if side == "next":
             seg["end"] = ms_to_time(_ms(seg, "end") + need)

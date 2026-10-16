@@ -30,7 +30,7 @@ from ..segment import (enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
                        place_tag_cues, relieve_fast_cues, repair_cue_breaks,
                        resolve_overlaps, run_iterative_merging,
-                       set_config, set_language, split_long_segments,
+                       set_config, set_language, split_long_segments, split_unclean_cues,
                        validate_srt_output, balance_block_enhanced)
 
 from ..utils import (detect_language, extract_tags_from_transcript,
@@ -378,6 +378,7 @@ class PipelineRunner(RobustStagesMixin):
             segments = split_long_segments(initial_segments)
             segments = run_iterative_merging(segments)
             segments = split_long_segments(segments)
+            segments = split_unclean_cues(segments)
             segments = place_tag_cues(segments, events=tag_events,
                                       min_ms=seg_cfg.min_cue_ms)
             segments = resolve_overlaps(segments)
