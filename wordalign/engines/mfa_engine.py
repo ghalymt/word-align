@@ -3,9 +3,15 @@
 The ``mfa`` executable is resolved in this order:
     1. explicit ``mfa_cmd`` argument
     2. ``WORDALIGN_MFA`` environment variable (exe path *or* conda env root)
-    3. ``mfa`` found on PATH
-    4. common conda env locations (``aligner``/``aligner_v2`` under the
-       active or default conda root)
+    3. conda environments: the active one, the bundled ``<venvs>/mfa``, and
+       ``aligner``/``aligner_v2``/``mfa`` under the user's conda folders
+    4. ``mfa`` found on PATH
+
+Conda environments come before PATH because a ``pip install`` of MFA on
+Windows lacks its native ``kalpy`` module and fails on every run. An
+environment is run as if activated: its DLL folders go on PATH and the
+user site-packages are ignored (``PYTHONNOUSERSITE``), so a broken pip copy
+of MFA in the user's site-packages cannot shadow the environment's own.
 """
 from __future__ import annotations
 
@@ -13,7 +19,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 
 def _candidate_env_roots() -> List[Path]:
@@ -41,6 +47,47 @@ def _exe_in_env(env_root: Path) -> Optional[Path]:
         if cand.exists():
             return cand
     return None
+
+
+def env_for_conda(env_root: Path, base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Environment variables that run *env_root*'s tools as if activated."""
+    env = dict(os.environ if base is None else base)
+    paths = [env_root, env_root / "Scripts", env_root / "bin",
+             env_root / "Library" / "bin",
+             env_root / "Library" / "usr" / "bin",
+             env_root / "Library" / "mingw-w64" / "bin"]
+    env["PATH"] = os.pathsep.join(str(p) for p in paths) + os.pathsep + env.get("PATH", "")
+    env["CONDA_PREFIX"] = str(env_root)
+    # The user's site-packages (same Python minor version) would otherwise
+    # come before the environment's own packages.
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
+
+
+def resolve_mfa(mfa_cmd: Optional[str] = None) -> Tuple[Optional[str], Dict[str, str]]:
+    """(mfa executable or None, environment to run it with)."""
+    env_setting = mfa_cmd or os.environ.get("WORDALIGN_MFA")
+    if env_setting:
+        p = Path(env_setting)
+        if p.is_dir():                       # a conda env root
+            exe = _exe_in_env(p)
+            if exe:
+                return str(exe), env_for_conda(p)
+        elif p.is_file() or shutil.which(env_setting):
+            exe_path = Path(shutil.which(env_setting) or env_setting)
+            root = exe_path.parent.parent if exe_path.parent.name.lower() in (
+                "scripts", "bin") else None
+            if root is not None and (root / "conda-meta").is_dir():
+                return str(exe_path), env_for_conda(root)
+            return str(exe_path), dict(os.environ)
+    for env_root in _candidate_env_roots():
+        exe = _exe_in_env(env_root)
+        if exe:
+            return str(exe), env_for_conda(env_root)
+    which = shutil.which("mfa")
+    if which:
+        return which, dict(os.environ)
+    return None, dict(os.environ)
 
 
 # MFA language model mapping. Maps ISO 639-1 codes to MFA model names.
@@ -147,40 +194,14 @@ class MFAWrapper:
 
     # -- executable resolution ---------------------------------------------
     def _resolve_mfa(self, mfa_cmd: Optional[str]) -> str:
-        candidates: List[str] = []
-        env_setting = mfa_cmd or os.environ.get("WORDALIGN_MFA")
-        if env_setting:
-            p = Path(env_setting)
-            if p.is_dir():                       # treat as conda env root
-                exe = _exe_in_env(p)
-                if exe:
-                    self._augment_path(p)
-                    return str(exe)
-            candidates.append(env_setting)
-        which = shutil.which("mfa")
-        if which:
-            candidates.append(which)
-        for env_root in _candidate_env_roots():
-            exe = _exe_in_env(env_root)
-            if exe:
-                self._augment_path(env_root)
-                candidates.append(str(exe))
-                break
-        if not candidates:
+        exe, env = resolve_mfa(mfa_cmd)
+        if exe is None:
             raise FileNotFoundError(
                 "Could not locate the MFA executable. Install Montreal Forced "
-                "Aligner and either add `mfa` to PATH or set WORDALIGN_MFA.")
-        return candidates[0]
-
-    def _augment_path(self, env_root: Path) -> None:
-        """Simulate conda activation so MFA finds _kalpy and its DLLs."""
-        paths = [env_root, env_root / "Scripts", env_root / "bin",
-                 env_root / "Library" / "bin",
-                 env_root / "Library" / "usr" / "bin",
-                 env_root / "Library" / "mingw-w64" / "bin"]
-        self.env["PATH"] = (os.pathsep.join(str(p) for p in paths)
-                            + os.pathsep + self.env.get("PATH", ""))
-        self.env["CONDA_PREFIX"] = str(env_root)
+                "Aligner from conda-forge and set WORDALIGN_MFA to its "
+                "environment (or add `mfa` to PATH).")
+        self.env = env
+        return exe
 
     # -- corpus / dictionary / alignment -----------------------------------
     # NB: corpus construction (paired .wav/.lab files) lives in
