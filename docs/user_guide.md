@@ -187,10 +187,18 @@ After a successful run, you'll find:
   best break; fast cues use the pause around them (and a little time from a
   slower neighbour) to stay near 20 characters per second.
 
-**Speech timing always wins.** A tag gets a cue of its own in the pause where
-the transcript puts it, timed by a matching sound event when there is one; an
-event that runs into speech is cut back to that pause. When the pause is too
-short for a 1-second cue, the tag shares the cue before (or after) it. The run
+**Speech timing always wins.** A tag between sentences gets a cue of its own
+filling the pause where the transcript puts it (timed by a matching sound
+event when there is one; an event that runs into speech is cut back to that
+pause). A tag inside a sentence stays inline in that sentence's cue, and a tag
+whose pause is under half a second shares the cue before (or after) it.
+
+**Timing style.** Cues start with their first word, run on to the next cue
+when the pause between them is up to 1 s (`--chain-gap-ms`), and linger
+250 ms after a longer pause (`--lead-out-ms`). A short sentence such as
+"Okay." keeps its own cue in sync with the words, even under `--min-cue-ms`
+(reported as "kept in sync"); `--no-sync-starts` instead lets it start a
+little early, or join a neighbour, to reach the minimum. The run
 checks the finished file and prints the result (`Final SRT -> …: all N words
 and M tags present, all rules met, …`); the same report is stored under
 `final_check` in the job manifest, and anything that still breaks a rule is

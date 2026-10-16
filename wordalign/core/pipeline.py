@@ -102,8 +102,11 @@ class PipelineRunner(RobustStagesMixin):
             segmentation = replace(
                 self.profile.segmentation,
                 **{key: int(overrides[key]) for key in (
-                    "max_cpl", "max_lines", "max_duration_ms", "min_cue_ms"
+                    "max_cpl", "max_lines", "max_duration_ms", "min_cue_ms",
+                    "chain_gap_ms", "lead_out_ms",
                 ) if key in overrides},
+                **({"sync_starts": bool(overrides["sync_starts"])}
+                   if "sync_starts" in overrides else {}),
             )
             export_overrides = {}
             if "doc_format" in overrides:
@@ -262,6 +265,9 @@ class PipelineRunner(RobustStagesMixin):
                 max_lines=cfg.max_lines,
                 max_duration_ms=cfg.max_duration_ms,
                 min_cue_ms=cfg.min_cue_ms,
+                sync_starts=getattr(cfg, "sync_starts", True),
+                chain_gap_ms=getattr(cfg, "chain_gap_ms", 1000),
+                lead_out_ms=getattr(cfg, "lead_out_ms", 250),
             ),
             export=ExportConfig(
                 transcript_format=cfg.doc_format,

@@ -135,6 +135,15 @@ def _parse_args(argv=None) -> PipelineConfig:
                    help="max on-screen duration per cue, ms (default 7000)")
     p.add_argument("--min-cue-ms", type=int, default=None,
                    help="minimum on-screen duration per cue, ms (default 700)")
+    p.add_argument("--chain-gap-ms", type=int, default=None,
+                   help="a cue stays on screen until the next one across pauses "
+                        "up to this long, ms (default 1000; 0 = never)")
+    p.add_argument("--lead-out-ms", type=int, default=None,
+                   help="after a longer pause a cue lingers this long, ms (default 250)")
+    p.add_argument("--no-sync-starts", action="store_true",
+                   help="let a short cue start before its first word to reach "
+                        "--min-cue-ms (default: cues start with their words, and a "
+                        "short sentence keeps its short cue)")
     p.add_argument("--profile", default=None,
                    help="pipeline profile name (fast, balanced, maximum_quality, "
                         "robust, cpu_only) or a profile .json")
@@ -215,7 +224,9 @@ def _parse_args(argv=None) -> PipelineConfig:
     for flag, value, lowest in (("--cpl", a.max_cpl, 1),
                                 ("--max-lines", a.max_lines, 1),
                                 ("--max-duration-ms", a.max_duration_ms, 1),
-                                ("--min-cue-ms", a.min_cue_ms, 0)):
+                                ("--min-cue-ms", a.min_cue_ms, 0),
+                                ("--chain-gap-ms", a.chain_gap_ms, 0),
+                                ("--lead-out-ms", a.lead_out_ms, 0)):
         if value is not None and value < lowest:
             p.error(f"{flag} must be at least {lowest} (got {value})")
     if (a.min_cue_ms is not None and a.max_duration_ms is not None
@@ -292,10 +303,13 @@ def _parse_args(argv=None) -> PipelineConfig:
     profile_overrides = {}
     if a.formats is not None:
         profile_overrides["formats"] = formats
-    for name in ("max_cpl", "max_lines", "max_duration_ms", "min_cue_ms"):
+    for name in ("max_cpl", "max_lines", "max_duration_ms", "min_cue_ms",
+                 "chain_gap_ms", "lead_out_ms"):
         value = getattr(a, name)
         if value is not None:
             profile_overrides[name] = value
+    if a.no_sync_starts:
+        profile_overrides["sync_starts"] = False
     if a.doc is not None:
         profile_overrides["doc_format"] = a.doc
     if a.no_doc_timestamps:
@@ -352,6 +366,9 @@ def _parse_args(argv=None) -> PipelineConfig:
         max_lines=a.max_lines if a.max_lines is not None else 2,
         max_duration_ms=a.max_duration_ms if a.max_duration_ms is not None else 7000,
         min_cue_ms=a.min_cue_ms if a.min_cue_ms is not None else 700,
+        sync_starts=not a.no_sync_starts,
+        chain_gap_ms=a.chain_gap_ms if a.chain_gap_ms is not None else 1000,
+        lead_out_ms=a.lead_out_ms if a.lead_out_ms is not None else 250,
         punctuation=a.punctuation,
         qa=a.qa,
         llm_engine=a.llm_engine or _llama_cpp_dir(),

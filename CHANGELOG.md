@@ -14,6 +14,19 @@
   and titles, numbers and units stay together; breaks prefer sentence ends,
   then clause punctuation, then conjunctions and prepositions.
 
+- **Timing in a reviewer's style** (measured on a finished GoTranscript job):
+  cues start with their first word (`--no-sync-starts` lets a short cue start
+  earlier to reach `--min-cue-ms`), run on to the next cue across pauses up
+  to 1 s (`--chain-gap-ms`), and linger 250 ms after a longer pause
+  (`--lead-out-ms`). A short sentence keeps its own short cue instead of
+  being joined to its neighbour; the final check lists those as "kept in
+  sync" rather than as failures.
+- The review queue flags cues next to a sound tag (words under applause or
+  laughter are often mistimed). `wordalign-bench fit-triage` also finds a
+  finished file named `<name>*reviewed*.srt`, and counts only real fixes
+  (changed words, moved starts, ends cut before the words were over) --
+  not cues cut differently or left on screen longer.
+
 ### Changed
 
 - **Sound tags never overlap speech.** The transcript's `[tag]` lines are
@@ -31,7 +44,13 @@
   then borrow a few ms from a neighbour or join it; fast cues take the free
   time around them, move a boundary to a better word, or join a neighbour.
   Every cue keeps at least 1 ms from the next.
-- Cue boundaries that split a phrase are moved to a cleaner word nearby.
+- Cue boundaries that split a phrase are moved to a cleaner word nearby, or
+  to punctuation within the same two cues; a boundary at a sentence end is
+  never moved.
+- A `[tag]` line inside a sentence ("but in" / `[chuckles]` / "a tornado.")
+  stays inline where the editor put it; a tag between sentences gets a cue of
+  its own filling its pause (down to 0.5 s), timed by a matching sound event
+  when there is one.
 
 ### Fixed
 
