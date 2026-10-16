@@ -104,6 +104,8 @@ docs/benchmark.md).
   `kalpy` on Windows) used to win and fail on every run.
 - `--doctor` starts MFA the same way instead of only finding it, so a
   broken MFA is reported.
+- MFA only fills words that have no time; a word already timed by an engine,
+  the aligner or a voter is no longer re-aligned (and overwritten).
 - A forced-aligned word no longer vanishes from the word-level SRT when the
   aligner gives it no length.
 

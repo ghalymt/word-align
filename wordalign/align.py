@@ -67,12 +67,17 @@ def match_timestamps(aligned_words: List[Dict], source_words: List[Dict],
 
 def run_mfa_on_gaps(aligned_words: List[Dict], audio_path: str,
                     mfa_wrapper: MFAWrapper) -> None:
-    """Force-align only the contiguous runs of unmatched words."""
+    """Force-align only the contiguous runs of words that have no time.
+
+    A word that already has a start and end (from an engine, the forced
+    aligner or a voter) is never re-aligned here, whatever its ``matched``
+    flag says.
+    """
     print("\n" + "=" * 60 + "\nRUNNING MFA ON MISSING TIMESTAMPS (SURGICAL MODE)")
     gaps: List[List[int]] = []
     current_gap: List[int] = []
     for i, word in enumerate(aligned_words):
-        if not word.get("matched", False):
+        if word.get("start") is None or word.get("end") is None:
             current_gap.append(i)
         elif current_gap:
             gaps.append(current_gap)

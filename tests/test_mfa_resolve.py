@@ -69,5 +69,42 @@ class TestResolveMfa(unittest.TestCase):
             self.assertIsNone(mfa_engine.resolve_mfa()[0])
 
 
+class TestOnlyUntimedWords(unittest.TestCase):
+
+    def test_timed_words_are_not_realigned(self):
+        import contextlib
+        import io
+        from wordalign import align
+        words = [{"word": "a", "start": 0.0, "end": 0.3},            # voter time, not "matched"
+                 {"word": "b"},                                        # untimed
+                 {"word": "c", "start": 1.0, "end": 1.2, "matched": False},
+                 {"word": "d"}, {"word": "e"},
+                 {"word": "f", "start": 2.0, "end": 2.3, "matched": True}]
+        sliced = []
+
+        class Wrapper:
+            corpus_dir = Path(tempfile.mkdtemp())
+            output_dir = corpus_dir
+
+            def missing_models(self):
+                return []
+
+            def detect_oov_words(self):
+                raise RuntimeError("stop after slicing")
+
+            def cleanup(self):
+                pass
+
+        self.addCleanup(lambda: __import__("shutil").rmtree(Wrapper.corpus_dir, True))
+        with patch.object(align, "create_chunk_wav", lambda *a, **k: sliced.append(a)), \
+                patch.object(align, "get_audio_duration", lambda p: 3.0), \
+                contextlib.redirect_stdout(io.StringIO()):
+            align.run_mfa_on_gaps(words, "audio.wav", Wrapper())
+        self.assertEqual(len(sliced), 2)                 # gaps [b] and [d, e] only
+        labs = sorted(p.read_text() for p in Wrapper.corpus_dir.glob("*.lab"))
+        self.assertEqual(labs, ["b", "d e"])
+        self.assertEqual(words[0]["start"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
