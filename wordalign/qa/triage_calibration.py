@@ -3,8 +3,9 @@
 Each job leaves ``<name>_review.json`` beside its subtitles. After you
 correct the subtitles, save the corrected file next to it as
 ``<name>_corrected.srt`` (or ``<name>.corrected.srt``). This module labels
-every reviewed cue "needed a fix" when the corrected file changed its words
-or moved its start or end by more than 150 ms, then fits the logistic
+every reviewed cue "needed a fix" when the corrected file changed its words,
+moved its start by more than 150 ms or ended it more than 150 ms sooner (a
+cue left on screen longer is a style choice, not a fix), then fits the logistic
 weights (shrunk towards the defaults, so a few jobs cannot overfit) and
 saves them to ``~/.wordalign/triage_weights.json``, which every later run
 loads.
@@ -40,7 +41,9 @@ def corrected_for(review_path: Path) -> Optional[Path]:
         p = review_path.with_name(name)
         if p.is_file():
             return p
-    return None
+    # A file you finished yourself, e.g. "<name>.txt_final_reviewed.srt".
+    found = sorted(review_path.parent.glob(f"{base}*reviewed*.srt"))
+    return found[0] if found else None
 
 
 def label_cues(cues: Sequence[Dict], corrected: Sequence[Dict]) -> List[int]:
@@ -63,7 +66,7 @@ def label_cues(cues: Sequence[Dict], corrected: Sequence[Dict]) -> List[int]:
             text = " ".join(text.split())[len(speaker) + 1:]
         changed = _norm(c.get("text", "")) != _norm(text)
         moved = (abs(best["start"] - s0) > MOVE_TOLERANCE_S
-                 or abs(best["end"] - s1) > MOVE_TOLERANCE_S)
+                 or s1 - best["end"] > MOVE_TOLERANCE_S)
         labels.append(1 if (changed or moved) else 0)
     return labels
 

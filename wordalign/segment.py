@@ -1165,14 +1165,28 @@ def inline_mid_sentence_tags(segments: List[Dict]) -> List[Dict]:
     "[chuckles]" / "a tornado.") joins the text before it, so it stays
     inline where the editor put it; tags between sentences stay separate."""
     out: List[Dict] = []
-    for seg in segments:
+    for k, seg in enumerate(segments):
         prev = out[-1] if out else None
+        nxt = segments[k + 1] if k + 1 < len(segments) else None
         if (seg.get("tag") and prev is not None and not prev.get("tag")
-                and not has_terminal_punctuation(prev["text"])):
+                and _sentence_continues(prev["text"], nxt["text"] if nxt is not None
+                                        and not nxt.get("tag") else "")):
             out[-1] = dict(prev, text=f"{_flat(prev['text'])} {_flat(seg['text'])}")
             continue
         out.append(seg)
     return out
+
+
+def _sentence_continues(before: str, after: str) -> bool:
+    """Whether the sentence runs on across a tag between *before* and
+    *after*: no sentence end or broken-off dash before it, and the text
+    after it carries on in lower case (or with "I")."""
+    before = _flat(before)
+    if not before or has_terminal_punctuation(before) or before.endswith("-") \
+            or before.endswith("]"):
+        return False
+    first = _flat(after)[:2]
+    return bool(first) and (first[0].islower() or first in ("I ", "I'") or first == "I")
 
 
 def split_long_segments(segments: List[Dict]) -> List[Dict]:
