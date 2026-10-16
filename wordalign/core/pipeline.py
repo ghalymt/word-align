@@ -387,9 +387,17 @@ class PipelineRunner(RobustStagesMixin):
                 stage="segmentation",
                 message=f"Preserving {len(segments)} cues from input SRT (no re-merging)."))
         else:
-            # A sentence at a time: the fewest cues that fit, broken at
-            # punctuation, pauses and clean phrase boundaries.
-            segments = segment_by_sentence(initial_segments)
+            from .. import segment as _seg
+            if _seg.SEGMENTER == "sentences":
+                # A sentence at a time: the fewest cues that fit, broken at
+                # punctuation, pauses and clean phrase boundaries.
+                segments = segment_by_sentence(initial_segments)
+            else:
+                # The transcript's lines, merged up to sentence ends within
+                # the layout; lines too long for a cue are split first.
+                segments = split_long_segments(initial_segments)
+                segments = run_iterative_merging(segments)
+                segments = split_long_segments(segments)
             segments = split_unclean_cues(segments)
             if proposed_tags:
                 segments = insert_tag_events(segments, proposed_tags)

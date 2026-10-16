@@ -1063,6 +1063,12 @@ def _sentence_units(segments: List[Dict]) -> List[Dict]:
     return units
 
 
+# How the transcript becomes cues: "lines" merges the transcript's lines up
+# to sentence ends (closest to how an editor's lines are used), "sentences"
+# re-cuts each sentence from scratch (segment_by_sentence).
+SEGMENTER = "lines"
+
+
 def segment_by_sentence(segments: List[Dict]) -> List[Dict]:
     """Cues for the transcript, a sentence at a time: each sentence is split
     into the fewest cues that fit the layout and duration limits, at its best
@@ -1670,7 +1676,8 @@ def repair_cue_breaks(segments: List[Dict]) -> List[Dict]:
     return segs
 
 
-# Join a cue still faster than MAX_CPS with a neighbour when that reads slower.
+# Join a cue still faster than MAX_CPS with a neighbour when that reads
+# slower (not in sync mode: short sentences keep their own cue).
 JOIN_FAST_CUES = True
 
 # A cue still faster than TARGET_CPS may take this much on-screen time from
@@ -1756,7 +1763,8 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
         prev = out[-1] if out else None
         nxt = segs[i + 1] if i + 1 < len(segs) else None
         best = None
-        for side, a, b in ((("prev", prev, seg), ("next", seg, nxt)) if JOIN_FAST_CUES else ()):
+        join = JOIN_FAST_CUES and not _sync_starts
+        for side, a, b in ((("prev", prev, seg), ("next", seg, nxt)) if join else ()):
             if not _can_join(a, b):
                 continue
             other = a if side == "prev" else b

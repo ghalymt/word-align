@@ -187,7 +187,17 @@ class TestTiming(Layout):
     def _seg(self, a, b, text="x"):
         return {"start": S.ms_to_time(a), "end": S.ms_to_time(b), "text": text}
 
-    def test_short_cue_grows_backwards_too(self):
+    def test_short_cue_keeps_its_start_in_sync_mode(self):
+        segs = [self._seg(0, 1000, "first one here"), self._seg(1600, 1900, "Okay."),
+                self._seg(1950, 4000, "and then the next one")]
+        out = S.enforce_min_duration(segs, 1000)
+        okay = [s for s in out if "Okay." in s["text"]][0]
+        self.assertEqual(time_to_ms(okay["start"]), 1600)        # never before its word
+        self.assertEqual(time_to_ms(okay["end"]), 1949)          # runs on to the next cue
+
+    def test_short_cue_grows_backwards_without_sync(self):
+        S.set_config(SegmentationConfig(max_cpl=37, max_lines=2, max_duration_ms=7000,
+                                        min_cue_ms=1000, sync_starts=False))
         segs = [self._seg(0, 1000, "first one here"), self._seg(1600, 1900, "Okay."),
                 self._seg(1950, 4000, "and then the next one")]
         out = S.enforce_min_duration(segs, 1000)
@@ -195,6 +205,15 @@ class TestTiming(Layout):
         self.assertGreaterEqual(time_to_ms(okay["end"]) - time_to_ms(okay["start"]), 1000)
         for a, b in zip(out, out[1:]):
             self.assertGreaterEqual(time_to_ms(b["start"]) - time_to_ms(a["end"]), 1)
+
+    def test_chaining(self):
+        segs = [self._seg(0, 1000, "one"), self._seg(1800, 2600, "two"),
+                self._seg(5000, 6000, "three")]
+        out = S.chain_cues(segs, chain_gap_ms=1200, lead_out_ms=500)
+        self.assertEqual(time_to_ms(out[0]["end"]), 1799)        # short pause: runs on
+        self.assertEqual(time_to_ms(out[1]["end"]), 3100)        # long pause: lingers 500 ms
+        self.assertEqual(time_to_ms(out[2]["end"]), 6500)
+        self.assertEqual([time_to_ms(s["start"]) for s in out], [0, 1800, 5000])
 
     def test_fast_cue_lingers_into_the_pause(self):
         segs = [self._seg(0, 1000, "This sentence is far too fast to read."),
