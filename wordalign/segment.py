@@ -147,7 +147,7 @@ BALANCE_WEIGHT = 0.6
 
 def evaluate_split(text: str, pos: int, total_len: int,
                    min_ratio: float = MIN_LINE_RATIO) -> Optional[dict]:
-    if is_protected_phrase(text, pos):
+    if is_protected_phrase(text, pos) or _inside_tag(text, pos):
         return None
     line1 = text[:pos].strip()
     line2 = text[pos:].strip()
@@ -200,6 +200,25 @@ def check_if_text_can_be_split_prettily(text: str) -> bool:
 UNEVEN_PENALTY = 6.0
 
 
+_SOUND_TAGS = r"\[[^\]?]*\](?:\s+\[[^\]?]*\])*"
+_LEAD_TAG_RE = re.compile(rf"^({_SOUND_TAGS})\s+(.+)$")
+_TRAIL_TAG_RE = re.compile(rf"^(.+?)\s+({_SOUND_TAGS})$")
+_NOT_SOUND = re.compile(r"inaudible|unintelligible|indiscernible|\d{2}:\d{2}", re.I)
+
+
+def _edge_tag_lines(flat: str) -> Optional[str]:
+    """``[tag]`` + text (or text + ``[tag]``) as two lines, when both fit.
+    Markers such as ``[?]`` or ``[inaudible]`` stay inline."""
+    for rx, tag_group in ((_LEAD_TAG_RE, 1), (_TRAIL_TAG_RE, 2)):
+        m = rx.match(flat)
+        if not m or _NOT_SOUND.search(m.group(tag_group)):
+            continue
+        a, b = m.group(1), m.group(2)
+        if count_visible_characters(a) <= _max_cpl and count_visible_characters(b) <= _max_cpl:
+            return f"{a}\n{b}"
+    return None
+
+
 def _best_two_line_split(flat: str, total: int) -> Optional[dict]:
     best = None
     for i in range(1, len(flat)):
@@ -246,16 +265,23 @@ def balance_block_enhanced(text: str) -> str:
             l1 = count_visible_characters(lines[0])
             l2 = count_visible_characters(lines[1])
             ratio = l1 / (l1 + l2) if (l1 + l2) else 0
+            tag_line = any(_TAGS_ONLY_RE.match(line) for line in lines)
             if (l1 <= _max_cpl and l2 <= _max_cpl
-                    and MIN_LINE_RATIO <= ratio <= 1 - MIN_LINE_RATIO
-                    and break_cost(lines[0].split(), lines[1].split(), _language)
-                    < CLEAN_BREAK_LIMIT):
+                    and count_visible_characters(" ".join(lines)) > _max_cpl
+                    and (tag_line or (MIN_LINE_RATIO <= ratio <= 1 - MIN_LINE_RATIO
+                                      and break_cost(lines[0].split(), lines[1].split(),
+                                                     _language) < CLEAN_BREAK_LIMIT))):
                 return stripped
 
     flat = " ".join(stripped.replace("\n", " ").split())
     total = count_visible_characters(flat)
     if total <= _max_cpl or _max_lines < 2:
         return flat   # one line allowed: never invent a second one
+
+    # A sound tag opening or closing the cue gets a line of its own.
+    edge = _edge_tag_lines(flat)
+    if edge is not None:
+        return edge
 
     best = _best_two_line_split(flat, total)
     if best is not None:
@@ -302,7 +328,7 @@ def _best_multiline_split(text: str, n_lines: int) -> Optional[List[str]]:
     only ever visits splits that can work -- enumerating every combination
     of cut points blindly gave up on five-line cues before reaching one.
     """
-    words = text.split()
+    words = _tokenize(text)
     if len(words) < n_lines:
         return None
     # Visible length of words[a:b] joined by spaces, in O(1).
@@ -386,6 +412,20 @@ def shift_dangling_words(segments: List[Dict]) -> List[Dict]:
             segments[i]["text"] = prefix
             segments[i + 1]["text"] = f"{dangler} {next_text}"
     return segments
+
+
+_TOKEN_RE = re.compile(r"\S*\[[^\]]*\]\S*|\S+")
+
+
+def _tokenize(text: str) -> List[str]:
+    """Whitespace tokens, except that a ``[multi word tag]`` stays one token
+    so no line or cue break ever lands inside it."""
+    return _TOKEN_RE.findall(" ".join((text or "").split()))
+
+
+def _inside_tag(text: str, pos: int) -> bool:
+    """Whether position *pos* of *text* falls inside ``[...]``."""
+    return text.rfind("[", 0, pos) > text.rfind("]", 0, pos)
 
 
 def _token_is_word(tokens: List[str]) -> List[bool]:
@@ -872,7 +912,7 @@ def _split_segment(seg: Dict) -> List[Dict]:
     (:func:`break_cost`, plus a bonus for a pause between the words). A
     single word is always a valid cue.
     """
-    tokens = _flat(seg["text"]).split()
+    tokens = _tokenize(seg["text"])
     is_word = _token_is_word(tokens)
     words = seg.get("words") or []
     if len(tokens) < 2 or sum(is_word) != len(words):
@@ -967,7 +1007,7 @@ def split_unclean_cues(segments: List[Dict]) -> List[Dict]:
 
 
 def _clean_halves(seg: Dict) -> Optional[List[Dict]]:
-    tokens = _flat(seg["text"]).split()
+    tokens = _tokenize(seg["text"])
     is_word = _token_is_word(tokens)
     words = seg["words"]
     if sum(is_word) != len(words):
@@ -1062,6 +1102,21 @@ def _join_text(a: str, b: str) -> str:
     return balance_block_enhanced(f"{_flat(a)} {_flat(b)}".strip())
 
 
+def _tag_beside(text: str, tag: str, after: bool, clean: bool) -> Optional[str]:
+    """*text* with *tag* added after (or before) it: on the same line when
+    it all fits one line, else on a line of its own, else wherever the
+    balancer puts it. None if it does not fit."""
+    joined = f"{text} {tag}" if after else f"{tag} {text}"
+    if count_visible_characters(joined) <= _max_cpl:
+        return joined
+    if (_max_lines >= 2 and count_visible_characters(text) <= _max_cpl
+            and count_visible_characters(tag) <= _max_cpl):
+        return f"{text}\n{tag}" if after else f"{tag}\n{text}"
+    if _text_fits(joined, clean=clean):
+        return balance_block_enhanced(joined)
+    return None
+
+
 def _fold_tag(out: List[Dict], segments: List[Dict], j: int, text: str,
               prefer_next: bool) -> bool:
     """Put *text* (a tag) into the cue before it (``out[-1]``) or after it
@@ -1074,10 +1129,9 @@ def _fold_tag(out: List[Dict], segments: List[Dict], j: int, text: str,
         for side, cue in order:
             if cue is None:
                 continue
-            joined = (f"{_flat(cue['text'])} {text}" if side == "prev"
-                      else f"{text} {_flat(cue['text'])}")
-            if _text_fits(joined, clean=clean):
-                new = dict(cue, text=balance_block_enhanced(joined))
+            laid = _tag_beside(_flat(cue["text"]), text, side == "prev", clean)
+            if laid is not None:
+                new = dict(cue, text=laid)
                 if side == "prev":
                     out[-1] = new
                 else:
@@ -1331,7 +1385,7 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
         return None
     if a.get("speaker") != b.get("speaker") or a.get("words") is None or b.get("words") is None:
         return None
-    ta, tb = _flat(a["text"]).split(), _flat(b["text"]).split()
+    ta, tb = _tokenize(a["text"]), _tokenize(b["text"])
     tokens = ta + tb
     words = list(a["words"]) + list(b["words"])
     is_word = _token_is_word(tokens)
@@ -1420,7 +1474,7 @@ def repair_cue_breaks(segments: List[Dict]) -> List[Dict]:
         a, b = segs[i], segs[i + 1]
         if _is_tag(a) or _is_tag(b) or _ms(b, "start") - _ms(a, "end") > 300:
             continue                      # a pause is a fine place to change cue
-        ta, tb = _flat(a["text"]).split(), _flat(b["text"]).split()
+        ta, tb = _tokenize(a["text"]), _tokenize(b["text"])
         if not ta or not tb or break_cost(ta[-3:], tb[:3], _language) < CLEAN_BREAK_LIMIT:
             continue
         pair = _resplit_pair(a, b, mode="break")

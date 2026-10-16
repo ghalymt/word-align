@@ -238,6 +238,8 @@ def break_cost(left: Sequence[str], right: Sequence[str], language: str = "en") 
         cost += PREP_START
     if bl in _PARTICLES and _verbish(al):
         cost += BAD                                   # phrasal verb
+    elif al in {"get", "gets", "got", "getting", "gotten"} and bl.endswith("ed"):
+        cost += BAD                                   # "get | started"
     if bl in _OBJECTS and al not in _CONJUNCTIONS | _RELATIVES | _SUBJECTS:
         cost += OBJECT_SPLIT                          # "enjoy | it", "showing | it"
     if _is_number(al) and (bl in _UNITS or (bl.isalpha() and bl not in _FUNCTION_WORDS
