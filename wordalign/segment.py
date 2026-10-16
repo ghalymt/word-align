@@ -229,7 +229,9 @@ def _best_two_line_split(flat: str, total: int) -> Optional[dict]:
             continue
         shorter = min(count_visible_characters(c["l1"]), count_visible_characters(c["l2"]))
         if shorter < total * MIN_LINE_RATIO:
-            c["score"] += UNEVEN_PENALTY
+            # Grows from 0 at MIN_LINE_RATIO to UNEVEN_PENALTY at RELAXED_LINE_RATIO.
+            short_by = (MIN_LINE_RATIO - shorter / total) / (MIN_LINE_RATIO - RELAXED_LINE_RATIO)
+            c["score"] += UNEVEN_PENALTY * min(1.0, short_by)
         if best is None or c["score"] < best["score"]:
             best = c
     return best

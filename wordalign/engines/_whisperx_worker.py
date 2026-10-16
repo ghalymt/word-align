@@ -177,17 +177,8 @@ def main():
     del model
     _clean(torch)
 
-    model_name = ALIGNMENT_MODEL_MAP.get(args.language,
-                                         ALIGNMENT_MODEL_MAP["default"])
-    log(f"[whisperx] loading alignment model: {model_name}")
-    try:
-        model_a, metadata = whisperx.load_align_model(
-            language_code=args.language, device=device, model_name=model_name)
-    except Exception as exc:
-        log(f"[whisperx] {model_name} unavailable ({exc}); "
-            "falling back to WhisperX auto-selection.")
-        model_a, metadata = whisperx.load_align_model(
-            language_code=args.language, device=device)
+    model_a, metadata = _load_align_model(whisperx, args.language, device,
+                                          args.models_dir)
 
     log("[whisperx] aligning timestamps...")
     aligned = whisperx.align(
@@ -219,15 +210,32 @@ def main():
     log(f"[whisperx] done: {len(words)} words, {len(events)} events")
 
 
-def _load_align_model(whisperx, language, device):
+def align_model_dirs(models_dir, model_name):
+    """Where to look for the alignment model: the models folder itself and
+    its ``hub`` subfolder (a Hugging Face ``HF_HOME`` keeps models there),
+    the one that holds *model_name* first. ``[None]`` = the default cache."""
+    if not models_dir:
+        return [None]
+    found = [d for d in (models_dir, os.path.join(models_dir, "hub")) if os.path.isdir(d)]
+    folder = "models--" + model_name.replace("/", "--")
+    found.sort(key=lambda d: not os.path.isdir(os.path.join(d, folder)))
+    return found or [None]
+
+
+def _load_align_model(whisperx, language, device, models_dir=None):
     model_name = ALIGNMENT_MODEL_MAP.get(language, ALIGNMENT_MODEL_MAP["default"])
-    try:
-        return whisperx.load_align_model(language_code=language, device=device,
-                                         model_name=model_name)
-    except Exception as exc:
-        log(f"[whisperx] {model_name} unavailable ({exc}); falling back to "
-            "WhisperX auto-selection.")
-        return whisperx.load_align_model(language_code=language, device=device)
+    log(f"[whisperx] loading alignment model: {model_name}")
+    last = None
+    for model_dir in align_model_dirs(models_dir, model_name):
+        try:
+            kwargs = {"model_dir": model_dir} if model_dir else {}
+            return whisperx.load_align_model(language_code=language, device=device,
+                                             model_name=model_name, **kwargs)
+        except Exception as exc:          # not in this folder (or an old whisperx)
+            last = exc
+    log(f"[whisperx] {model_name} unavailable ({last}); falling back to "
+        "WhisperX auto-selection.")
+    return whisperx.load_align_model(language_code=language, device=device)
 
 
 def _align_mode(args, whisperx, torch, device):
@@ -240,7 +248,8 @@ def _align_mode(args, whisperx, torch, device):
     with open(args.align_json, "r", encoding="utf-8") as f:
         windows = json.load(f)
     audio = whisperx.load_audio(args.audio)
-    model_a, metadata = _load_align_model(whisperx, args.language, device)
+    model_a, metadata = _load_align_model(whisperx, args.language, device,
+                                          args.models_dir)
     out = []
     for win in windows:
         words = [str(w) for w in win["words"]]

@@ -224,17 +224,8 @@ def _run_whisperx_inproc(audio_path: str,
         if device == "cuda":
             torch.cuda.empty_cache()
 
-        model_name = ALIGNMENT_MODEL_MAP.get(language,
-                                             ALIGNMENT_MODEL_MAP["default"])
-        print(f"Loading alignment model: {model_name}")
-        try:
-            model_a, metadata = whisperx.load_align_model(
-                language_code=language, device=device, model_name=model_name)
-        except Exception as exc:
-            print(f"[warn] {model_name} unavailable ({exc}); "
-                  f"falling back to WhisperX auto-selection.")
-            model_a, metadata = whisperx.load_align_model(
-                language_code=language, device=device)
+        from ._whisperx_worker import _load_align_model
+        model_a, metadata = _load_align_model(whisperx, language, device, models_dir)
         print("Aligning timestamps...")
         if cancel_event is not None and cancel_event.is_set():
             return [], []
