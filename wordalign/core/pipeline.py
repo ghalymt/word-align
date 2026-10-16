@@ -28,9 +28,10 @@ from ..config import PipelineConfig
 from ..ensemble import build_consensus, consensus_to_structured_text
 from ..segment import (enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
+                       place_tag_cues, relieve_fast_cues,
                        resolve_overlaps, run_iterative_merging,
-                       set_config, validate_srt_output,
-                       balance_block_enhanced)
+                       set_config, set_language, split_long_segments,
+                       validate_srt_output, balance_block_enhanced)
 
 from ..utils import (detect_language, extract_tags_from_transcript,
                      get_audio_duration, normalize_word, strip_tags,
@@ -342,9 +343,25 @@ class PipelineRunner(RobustStagesMixin):
 
     def _segment_transcript(self, original_text: str, aligned_words: List[Dict],
                             cue_boundaries: List[Tuple[int, int]],
-                            seg_cfg: SegmentationConfig) -> List[Dict]:
+                            seg_cfg: SegmentationConfig,
+                            language: Optional[str] = None,
+                            tag_events: Optional[List[Dict]] = None) -> List[Dict]:
+        previous_language = set_language(language or "en")
+        try:
+            return self._segment_transcript_in_layout(
+                original_text, aligned_words, cue_boundaries, seg_cfg, tag_events)
+        finally:
+            set_language(previous_language)
+
+    def _segment_transcript_in_layout(self, original_text: str, aligned_words: List[Dict],
+                                      cue_boundaries: List[Tuple[int, int]],
+                                      seg_cfg: SegmentationConfig,
+                                      tag_events: Optional[List[Dict]]) -> List[Dict]:
+        # The transcript's own [tag] lines stay in the subtitles, where the
+        # editor put them (an input SRT's cues are kept as they are).
         initial_segments = parse_human_transcript_to_srt_segments(
-            original_text, aligned_words, cue_boundaries=cue_boundaries)
+            original_text, aligned_words, cue_boundaries=cue_boundaries,
+            keep_tags=not cue_boundaries)
         if cue_boundaries:
             # Keep the input's cue membership (no merging), but still lay
             # each cue out within the CPL budget and remove overlaps between
@@ -356,9 +373,16 @@ class PipelineRunner(RobustStagesMixin):
                 stage="segmentation",
                 message=f"Preserving {len(segments)} cues from input SRT (no re-merging)."))
         else:
-            segments = run_iterative_merging(initial_segments)
+            # Lines too long for one cue (or on screen too long) are split
+            # first, so the merger can still pair the pieces with neighbours.
+            segments = split_long_segments(initial_segments)
+            segments = run_iterative_merging(segments)
+            segments = split_long_segments(segments)
+            segments = place_tag_cues(segments, events=tag_events,
+                                      min_ms=seg_cfg.min_cue_ms)
             segments = resolve_overlaps(segments)
             segments = enforce_min_duration(segments, seg_cfg.min_cue_ms)
+            segments = relieve_fast_cues(segments)
             segments = resolve_overlaps(segments)
         return segments
 
@@ -768,9 +792,14 @@ class PipelineRunner(RobustStagesMixin):
         self._emit(StageStarted(stage="segmentation",
                                 message=f"CPL={seg_cfg.max_cpl}, lines={seg_cfg.max_lines}"))
         t0 = time.time()
+        tag_events = None
+        if self._qmap is not None and getattr(self._qmap, "sed_events", None):
+            from ..tags import sed_detections
+            tag_events = sed_detections(self._qmap.sed_events)
         with self._job_layout(seg_cfg):
             segments = self._segment_transcript(
-                original_text, aligned_words, srt_cue_boundaries, seg_cfg)
+                original_text, aligned_words, srt_cue_boundaries, seg_cfg,
+                language=language, tag_events=tag_events)
         if cfg.dash_cues and any(seg.get("speaker") for seg in segments):
             from ..segment import merge_dash_cues
             with self._job_layout(seg_cfg):
@@ -903,7 +932,10 @@ class PipelineRunner(RobustStagesMixin):
 
         # Tags: timed sound events from the analysis stage when available.
         sed_events = (self._qmap.sed_events if self._qmap is not None else [])
-        if cfg.use_tags and sed_events and srt is not None:
+        if cfg.use_tags and srt is not None and any(s.get("tag") for s in segments):
+            # The transcript's tags are already cues of the subtitles.
+            self._write_transcript_tags(base, segments, sentence_entries, result)
+        elif cfg.use_tags and sed_events and srt is not None:
             self._write_sed_tags(base, original_text, human_tags, sed_events,
                                  sentence_entries, result,
                                  proposed=not cfg.transcript_path)
@@ -1117,6 +1149,26 @@ class PipelineRunner(RobustStagesMixin):
                         f"{len(aligned_words)} words labelled."))
         self._emit(StageCompleted(stage="diarization",
                                    duration_seconds=time.time() - t0))
+
+    def _write_transcript_tags(self, base: str, segments: List[Dict],
+                               sentence_entries, result) -> None:
+        """``_audio_tags.srt`` (the tag cues) and ``_combined.srt`` (the
+        subtitles, which already hold the transcript's tags)."""
+        tags = [srt.Subtitle(0, e.start, e.end, e.content)
+                for e, seg in zip(sentence_entries, segments) if seg.get("tag")]
+        for k, t in enumerate(tags, 1):
+            t.index = k
+        path = f"{base}_audio_tags.srt"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(srt.compose(tags, reindex=False))
+        result.audio_tags_srt_path = path
+        path2 = f"{base}_combined.srt"
+        with open(path2, "w", encoding="utf-8") as f:
+            f.write(srt.compose(sentence_entries))
+        result.combined_srt_path = path2
+        self._emit(StageMessage(
+            stage="output", message=f"{len(tags)} transcript tag cue(s); the other tags "
+                                    "share a cue with the words around them"))
 
     def _srt_with_speakers(self, entries, segments: List[Dict],
                            seg_cfg: SegmentationConfig):
