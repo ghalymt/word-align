@@ -69,41 +69,51 @@ class TestResolveMfa(unittest.TestCase):
             self.assertIsNone(mfa_engine.resolve_mfa()[0])
 
 
-class TestOnlyUntimedWords(unittest.TestCase):
+class TestMfaChunks(unittest.TestCase):
 
-    def test_timed_words_are_not_realigned(self):
-        import contextlib
-        import io
-        from wordalign import align
-        words = [{"word": "a", "start": 0.0, "end": 0.3},            # voter time, not "matched"
-                 {"word": "b"},                                        # untimed
-                 {"word": "c", "start": 1.0, "end": 1.2, "matched": False},
-                 {"word": "d"}, {"word": "e"},
-                 {"word": "f", "start": 2.0, "end": 2.3, "matched": True}]
-        sliced = []
+    def _words(self):
+        return [{"word": "a", "start": 0.0, "end": 0.3},            # voter time, not "matched"
+                {"word": "b"},                                        # untimed
+                {"word": "c", "start": 1.0, "end": 1.2, "matched": False},
+                {"word": "d", "start": 1.3, "end": 1.5},
+                {"word": "e", "start": 1.6, "end": 1.8},
+                {"word": "f", "start": 1.9, "end": 2.1},
+                {"word": "g", "start": 2.2, "end": 2.4},
+                {"word": "h", "start": 2.5, "end": 2.7},
+                {"word": "i", "start": 2.8, "end": 3.0},
+                {"word": "j"}, {"word": "k"},
+                {"word": "l", "start": 4.0, "end": 4.3}]
 
-        class Wrapper:
-            corpus_dir = Path(tempfile.mkdtemp())
-            output_dir = corpus_dir
+    def test_gaps_with_context(self):
+        from wordalign.align import plan_mfa_chunks
+        chunks = plan_mfa_chunks(self._words(), 5.0, context=2)
+        self.assertEqual([c["gap_indices"] for c in chunks], [[1], [9, 10]])
+        self.assertEqual(chunks[0]["text"], "a b c d")
+        self.assertAlmostEqual(chunks[0]["start_offset"], 0.0)     # a starts at 0
+        self.assertAlmostEqual(chunks[0]["end_offset"], 1.75)      # d ends at 1.5 (+0.25)
+        self.assertEqual(chunks[1]["text"], "h i j k l")
+        self.assertAlmostEqual(chunks[1]["end_offset"], 4.55)
 
-            def missing_models(self):
-                return []
+    def test_overlapping_context_merges(self):
+        from wordalign.align import plan_mfa_chunks
+        chunks = plan_mfa_chunks(self._words(), 5.0, context=3)
+        self.assertEqual(len(chunks), 2)
+        chunks = plan_mfa_chunks(self._words(), 5.0, context=4)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["gap_indices"], [1, 9, 10])
 
-            def detect_oov_words(self):
-                raise RuntimeError("stop after slicing")
-
-            def cleanup(self):
-                pass
-
-        self.addCleanup(lambda: __import__("shutil").rmtree(Wrapper.corpus_dir, True))
-        with patch.object(align, "create_chunk_wav", lambda *a, **k: sliced.append(a)), \
-                patch.object(align, "get_audio_duration", lambda p: 3.0), \
-                contextlib.redirect_stdout(io.StringIO()):
-            align.run_mfa_on_gaps(words, "audio.wav", Wrapper())
-        self.assertEqual(len(sliced), 2)                 # gaps [b] and [d, e] only
-        labs = sorted(p.read_text() for p in Wrapper.corpus_dir.glob("*.lab"))
-        self.assertEqual(labs, ["b", "d e"])
+    def test_only_gap_words_take_mfa_times(self):
+        from types import SimpleNamespace as IV
+        from wordalign.align import apply_mfa_intervals, plan_mfa_chunks
+        words = self._words()
+        chunk = plan_mfa_chunks(words, 5.0, context=2)[0]
+        # MFA dropped "c" (an unknown word): the rest still lines up.
+        ivs = [IV(mark="a", minTime=0.0, maxTime=0.3), IV(mark="b", minTime=0.5, maxTime=0.8),
+               IV(mark="d", minTime=1.3, maxTime=1.5)]
+        self.assertEqual(apply_mfa_intervals(words, chunk, ivs), 1)
+        self.assertEqual((words[1]["start"], words[1]["source"]), (0.5, "MFA"))
         self.assertEqual(words[0]["start"], 0.0)
+        self.assertNotIn("source", words[0])
 
 
 if __name__ == "__main__":
