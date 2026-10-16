@@ -23,7 +23,7 @@ class SegmentationConfig:
     # to the next cue across pauses up to chain_gap_ms, and linger
     # lead_out_ms after a longer pause.
     sync_starts: bool = True
-    chain_gap_ms: int = 1200
+    chain_gap_ms: int = 1000
     lead_out_ms: int = 250
 
     @property
@@ -134,7 +134,7 @@ class PipelineProfile:
                 max_duration_ms=seg.get("max_duration_ms", 7000),
                 min_cue_ms=seg.get("min_cue_ms", 700),
                 sync_starts=seg.get("sync_starts", True),
-                chain_gap_ms=seg.get("chain_gap_ms", 1200),
+                chain_gap_ms=seg.get("chain_gap_ms", 1000),
                 lead_out_ms=seg.get("lead_out_ms", 250)),
             export=ExportConfig(
                 word_srt=export.get("word_srt", True),

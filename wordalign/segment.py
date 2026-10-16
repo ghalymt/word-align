@@ -37,7 +37,7 @@ _language = "en"                      # which line-break rules apply
 # the next cue when the pause before it is short, and linger a little after
 # a longer one.
 _sync_starts = True
-_chain_gap_ms = 1200
+_chain_gap_ms = 1000
 _lead_out_ms = 250
 
 # Second-attempt ratio for the balancer: prefer a slightly uneven split over
@@ -70,7 +70,7 @@ def set_config(config) -> None:
     _max_duration_ms = int(config.max_duration_ms)
     _min_cue_ms = int(config.min_cue_ms)
     _sync_starts = bool(getattr(config, "sync_starts", True))
-    _chain_gap_ms = int(getattr(config, "chain_gap_ms", 1200))
+    _chain_gap_ms = int(getattr(config, "chain_gap_ms", 1000))
     _lead_out_ms = int(getattr(config, "lead_out_ms", 250))
 
 
@@ -1366,8 +1366,10 @@ def place_tag_cues(segments: List[Dict], events=None,
         own = min(min_ms, TAG_MIN_MS)
         if hi - lo >= own:
             if event:
+                # The sound event's own time, inside the pause, and on screen
+                # for the minimum when the pause has room for it.
                 start = min(max(event[0], lo), hi - own)
-                end = min(max(event[1], start + own), hi)
+                end = min(max(event[1], start + min_ms), hi)
             elif nxt is None:
                 start, end = lo, lo + max(own, TAG_DEFAULT_MS)
             else:
