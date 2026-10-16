@@ -49,7 +49,7 @@ def check_subtitles(cues: Sequence, max_cpl: int, max_lines: int,
     """
     problems: Dict[str, List] = {k: [] for k in (
         "too_many_lines", "line_too_long", "should_be_one_line", "too_short",
-        "too_long", "overlap", "gap_under_min", "empty", "fast")}
+        "too_long", "overlap", "gap_under_min", "empty", "fast", "short_in_sync")}
     cps_values: List[float] = []
     prev_end = None
     for n, cue in enumerate(cues, 1):
@@ -65,7 +65,12 @@ def check_subtitles(cues: Sequence, max_cpl: int, max_lines: int,
         if len(lines) > 1 and len(flat) <= max_cpl:
             problems["should_be_one_line"].append(n)
         if dur_ms < min_ms - 0.5:
-            problems["too_short"].append(n)
+            # Short but running on to the next cue: the words are just short,
+            # and a longer cue would have to start before them.
+            nxt = cues[n] if n < len(cues) else None
+            chained = nxt is not None and (nxt.start - cue.end).total_seconds() * 1000.0 \
+                <= min_gap_ms + 0.5
+            problems["short_in_sync" if chained else "too_short"].append(n)
         if dur_ms > max_ms + 0.5:
             problems["too_long"].append(n)
         if prev_end is not None:
@@ -108,8 +113,10 @@ def check_subtitles(cues: Sequence, max_cpl: int, max_lines: int,
 
 
 def hard_failures(report: Dict) -> Dict[str, int]:
-    """The problems that break the promise (everything except reading speed)."""
-    out = {k: v["count"] for k, v in report["problems"].items() if v["count"] and k != "fast"}
+    """The problems that break the promise (everything except reading speed
+    and short cues that run on to the next one)."""
+    out = {k: v["count"] for k, v in report["problems"].items()
+           if v["count"] and k not in ("fast", "short_in_sync")}
     tr = report.get("transcript")
     if tr and tr["missing"]:
         out["missing_from_transcript"] = tr["missing"]
@@ -127,6 +134,9 @@ def summary_line(report: Dict) -> str:
     fails = hard_failures(report)
     parts.append("all rules met" if not fails else
                  "; ".join(f"{k.replace('_', ' ')}: {v}" for k, v in fails.items()))
+    short = report["problems"]["short_in_sync"]["count"]
+    if short:
+        parts.append(f"{short} short cue(s) kept in sync with their words")
     cps = report.get("cps")
     if cps:
         parts.append(f"reading speed median {cps['median']} cps, "

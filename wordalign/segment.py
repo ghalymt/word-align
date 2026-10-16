@@ -33,6 +33,12 @@ _max_lines = 2                        # lines per cue
 _max_duration_ms = MAX_DURATION_MS    # max on-screen duration per cue
 _min_cue_ms = 700                     # minimum on-screen duration per cue
 _language = "en"                      # which line-break rules apply
+# Timing style (see chain_cues): cues start with their first word, run on to
+# the next cue when the pause before it is short, and linger a little after
+# a longer one.
+_sync_starts = True
+_chain_gap_ms = 1200
+_lead_out_ms = 500
 
 # Second-attempt ratio for the balancer: prefer a slightly uneven split over
 # leaving a line too long, but never force an outright ugly break.
@@ -58,10 +64,14 @@ def set_config(config) -> None:
     with a single config-driven setup, making multi-job operation safe.
     """
     global _max_cpl, _max_lines, _max_duration_ms, _min_cue_ms
+    global _sync_starts, _chain_gap_ms, _lead_out_ms
     _max_cpl = int(config.max_cpl)
     _max_lines = int(config.max_lines)
     _max_duration_ms = int(config.max_duration_ms)
     _min_cue_ms = int(config.min_cue_ms)
+    _sync_starts = bool(getattr(config, "sync_starts", True))
+    _chain_gap_ms = int(getattr(config, "chain_gap_ms", 1200))
+    _lead_out_ms = int(getattr(config, "lead_out_ms", 500))
 
 
 def set_language(language: Optional[str]) -> str:
@@ -82,6 +92,9 @@ def get_config() -> dict:
         "max_lines": _max_lines,
         "max_duration_ms": _max_duration_ms,
         "min_cue_ms": _min_cue_ms,
+        "sync_starts": _sync_starts,
+        "chain_gap_ms": _chain_gap_ms,
+        "lead_out_ms": _lead_out_ms,
     }
 
 
@@ -834,14 +847,26 @@ MAX_CPS = 25.0
 # How far a cue may appear before its first word for reading speed (a
 # cue's end lingers into the pause after it first).
 MAX_LEAD_IN_MS = 500
-# On-screen time for a [tag] cue when no sound event says how long it lasts.
+# On-screen time for a [tag] cue at the very end, when no sound event says
+# how long it lasts; elsewhere a tag cue fills its pause.
 TAG_DEFAULT_MS = 2000
+# A tag between sentences gets a cue of its own when its pause is at least
+# this long (even if that is under the minimum cue duration -- speech keeps
+# its timing); a shorter pause, or a tag inside a sentence, shares a cue.
+TAG_MIN_MS = 500
 
 # Splitting a cue that is too long: every extra cue costs PIECE_COST, more
 # than the best break can earn back, so a cue is split into as few pieces as
 # will fit and the breaks are chosen among those.
 PIECE_COST = 30.0
 SHORT_PIECE_CHARS = 12
+# Extra cost of a two-line cue (0: as good as one line), and of each
+# character per second a cue's words read faster than MAX_CPS.
+TWO_LINE_COST = 0.0
+FAST_PIECE_COST = 1.0
+# Pause between two words: every 50 ms is one point of bonus for a cue
+# break there, up to PAUSE_BONUS_MAX.
+PAUSE_BONUS_MAX = 12.0
 
 
 def _ms(seg: Dict, key: str) -> int:
@@ -936,7 +961,7 @@ def _split_segment(seg: Dict) -> List[Dict]:
         if 0 <= before < len(words) and after < len(words) \
                 and ends[before] is not None and starts[after] is not None:
             pause = (starts[after] - ends[before]) * 1000.0
-            cost -= max(0.0, min(12.0, pause / 50.0))
+            cost -= max(0.0, min(PAUSE_BONUS_MAX, pause / 50.0))
         return cost
 
     n = len(tokens)
@@ -966,6 +991,10 @@ def _split_segment(seg: Dict) -> List[Dict]:
                 cost += SHORT_PIECE_CHARS - width
             if span < _min_cue_ms:
                 cost += 4.0
+            if width > _max_cpl:
+                cost += TWO_LINE_COST
+            if span > 0 and FAST_PIECE_COST:
+                cost += FAST_PIECE_COST * max(0.0, width * 1000.0 / span - MAX_CPS)
             if a > 0:
                 cost += cut_cost(a)
             if cost < best[b]:
@@ -984,6 +1013,59 @@ def _split_segment(seg: Dict) -> List[Dict]:
         _retime(piece)
         pieces.append(piece)
     return pieces
+
+
+def _sentence_units(segments: List[Dict]) -> List[Dict]:
+    """Join the transcript's lines into sentences (one speaker each). A
+    ``[tag]`` line in the middle of a sentence stays inside it, where the
+    editor put it; one between sentences stays a ``tag`` segment."""
+    units: List[Dict] = []
+    cur: Optional[Dict] = None
+
+    def close():
+        nonlocal cur
+        if cur is not None:
+            units.append(cur)
+            cur = None
+
+    for seg in segments:
+        if seg.get("tag"):
+            if cur is not None and not has_terminal_punctuation(cur["text"]):
+                cur = dict(cur, text=f"{_flat(cur['text'])} {_flat(seg['text'])}")
+                continue
+            close()
+            units.append(seg)
+            continue
+        if cur is not None and (seg.get("speaker") != cur.get("speaker")
+                                or cur.get("words") is None or seg.get("words") is None):
+            close()
+        if cur is None:
+            cur = dict(seg, text=_flat(seg["text"]))
+        else:
+            cur = _joined(cur, seg, f"{_flat(cur['text'])} {_flat(seg['text'])}", [cur, seg])
+        if has_terminal_punctuation(seg["text"]) and not ends_with_nonterminal_abbreviation(seg["text"]):
+            close()
+    close()
+    return units
+
+
+def segment_by_sentence(segments: List[Dict]) -> List[Dict]:
+    """Cues for the transcript, a sentence at a time: each sentence is split
+    into the fewest cues that fit the layout and duration limits, at its best
+    breaks -- punctuation first, then pauses, then clean phrase boundaries
+    (see :func:`_split_segment`). Sentences are never merged together."""
+    out: List[Dict] = []
+    for unit in _sentence_units(segments):
+        if unit.get("tag") or not unit.get("words"):
+            out.append(unit)
+            continue
+        pieces = _split_segment(unit)
+        if len(pieces) == 1:
+            pieces = [dict(pieces[0], text=balance_block_enhanced(pieces[0]["text"]))]
+            _retime(pieces[0])
+        out.extend(pieces)
+    print(f"[ok] {len(out)} cues from {sum(1 for u in out if not u.get('tag'))} speech pieces")
+    return out
 
 
 def split_unclean_cues(segments: List[Dict]) -> List[Dict]:
@@ -1232,17 +1314,30 @@ def place_tag_cues(segments: List[Dict], events=None,
         hi = (_ms(nxt, "start") - OVERLAP_GAP_MS) if nxt else lo + TAG_DEFAULT_MS
         event = (group[0].get("event")
                  or _matching_event(events, _tag_labels(text), lo, hi))
-        if hi - lo >= min_ms:
+        own = min(min_ms, TAG_MIN_MS)
+        if hi - lo >= own:
             if event:
-                start = min(max(event[0], lo), hi - min_ms)
-                end = min(max(event[1], start + min_ms), hi)
+                start = min(max(event[0], lo), hi - own)
+                end = min(max(event[1], start + own), hi)
+            elif nxt is None:
+                start, end = lo, lo + max(own, TAG_DEFAULT_MS)
             else:
-                start, end = lo, min(hi, lo + max(min_ms, TAG_DEFAULT_MS))
+                start, end = lo, hi                    # the whole pause
             end = min(end, start + _max_duration_ms)
-            out.append({"index": group[0].get("index"), "start": ms_to_time(start),
-                        "end": ms_to_time(end), "text": balance_block_enhanced(text),
-                        "speaker": None, "tag": True, "words": [],
-                        "start_source": "tag", "end_source": "tag"})
+            texts = [_flat(g["text"]) for g in group]
+            if len(texts) > 1 and (end - start) // len(texts) >= own:
+                # Consecutive tags take turns in the pause.
+                step = (end - start + OVERLAP_GAP_MS) // len(texts)
+                spans = [(start + k * step, start + (k + 1) * step - OVERLAP_GAP_MS)
+                         for k in range(len(texts))]
+                spans[-1] = (spans[-1][0], end)
+            else:
+                texts, spans = [text], [(start, end)]
+            for t, (a, b) in zip(texts, spans):
+                out.append({"index": group[0].get("index"), "start": ms_to_time(a),
+                            "end": ms_to_time(b), "text": balance_block_enhanced(t),
+                            "speaker": None, "tag": True, "words": [],
+                            "start_source": "tag", "end_source": "tag"})
             placed += 1
         else:
             prefer_next = bool(event and prev is not None and nxt is not None
@@ -1265,6 +1360,32 @@ def place_tag_cues(segments: List[Dict], events=None,
 
 
 # -- on-screen time ----------------------------------------------------------------
+def chain_cues(segments: List[Dict], chain_gap_ms: Optional[int] = None,
+               lead_out_ms: Optional[int] = None) -> List[Dict]:
+    """Bridge short pauses: a cue stays on screen until the next one starts
+    (1 ms before it) when the pause between them is at most *chain_gap_ms*;
+    after a longer pause it lingers *lead_out_ms*. Starts are not moved, so
+    every cue still appears with its first word. Tag cues already fill
+    their pause."""
+    chain_gap_ms = _chain_gap_ms if chain_gap_ms is None else chain_gap_ms
+    lead_out_ms = _lead_out_ms if lead_out_ms is None else lead_out_ms
+    segs = [dict(s) for s in segments]
+    for i, seg in enumerate(segs):
+        if _is_tag(seg):
+            continue
+        s0, e = _ms(seg, "start"), _ms(seg, "end")
+        nxt = segs[i + 1] if i + 1 < len(segs) else None
+        if nxt is None:
+            e2 = e + lead_out_ms
+        else:
+            n0 = _ms(nxt, "start")
+            e2 = n0 - OVERLAP_GAP_MS if n0 - e <= chain_gap_ms else min(e + lead_out_ms,
+                                                                     n0 - OVERLAP_GAP_MS)
+        e2 = max(e, min(e2, s0 + _max_duration_ms))
+        seg["end"] = ms_to_time(e2)
+    return segs
+
+
 def _can_join(a: Optional[Dict], b: Optional[Dict], clean: bool = True) -> bool:
     if a is None or b is None or _is_tag(a) or _is_tag(b):
         return False
@@ -1354,9 +1475,10 @@ def _borrow(out: List[Dict], segs: List[Dict], i: int, min_ms: int) -> bool:
 
 
 def _extend_short(segs: List[Dict], min_ms: int) -> None:
+    lead_in = 0 if _sync_starts else min_ms
     for i, seg in enumerate(segs):
         if not _is_tag(seg) and _dur(seg) < min_ms:
-            _grow(segs, i, min_ms - _dur(seg), max_lead_in=min_ms)
+            _grow(segs, i, min_ms - _dur(seg), max_lead_in=lead_in)
 
 
 def enforce_min_duration(segments: List[Dict],
@@ -1387,12 +1509,12 @@ def enforce_min_duration(segments: List[Dict],
             continue
         prev = out[-1] if out else None
         nxt = segs[i + 1] if i + 1 < len(segs) else None
-        if _borrow(out, segs, i, min_ms):
+        if not _sync_starts and _borrow(out, segs, i, min_ms):
             out.append(seg)
             i += 1
             continue
         options = []
-        for clean in (True, False):
+        for clean in ((True, False) if not _sync_starts or _dur(seg) < min_ms // 3 else ()):
             if _can_join(prev, seg, clean):
                 options.append((_ms(seg, "start") - _ms(prev, "end"), 0, "prev"))
             if _can_join(seg, nxt, clean):
@@ -1534,6 +1656,9 @@ def repair_cue_breaks(segments: List[Dict]) -> List[Dict]:
     return segs
 
 
+# Join a cue still faster than MAX_CPS with a neighbour when that reads slower.
+JOIN_FAST_CUES = True
+
 # A cue still faster than TARGET_CPS may take this much on-screen time from
 # a slower neighbour it touches (the neighbour shows a little later or ends a
 # little sooner), as long as the neighbour stays at or under TARGET_CPS.
@@ -1591,13 +1716,15 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
         return segments
     segs = [dict(s) for s in segments]
 
+    lead_in = 0 if _sync_starts else MAX_LEAD_IN_MS
+
     def ease(cues: List[Dict]) -> None:
         for i, seg in enumerate(cues):
             if _is_tag(seg):
                 continue
             need = int(len(_flat(seg["text"])) * 1000.0 / target_cps) - _dur(seg)
             if need > 0:
-                _grow(cues, i, need, MAX_LEAD_IN_MS)
+                _grow(cues, i, need, lead_in)
 
     ease(segs)
     moved = _resplit_fast(segs, target_cps)
@@ -1615,7 +1742,7 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
         prev = out[-1] if out else None
         nxt = segs[i + 1] if i + 1 < len(segs) else None
         best = None
-        for side, a, b in (("prev", prev, seg), ("next", seg, nxt)):
+        for side, a, b in ((("prev", prev, seg), ("next", seg, nxt)) if JOIN_FAST_CUES else ()):
             if not _can_join(a, b):
                 continue
             other = a if side == "prev" else b
@@ -1634,7 +1761,7 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
             merged += 1
         i += 1
     ease(out)
-    lent = _borrow_for_speed(out, target_cps)
+    lent = 0 if _sync_starts else _borrow_for_speed(out, target_cps)
     if moved:
         print(f"[ok] Moved {moved} cue boundary(ies) to even out reading speed")
     if lent:

@@ -28,7 +28,8 @@ from ..config import PipelineConfig
 from ..ensemble import build_consensus, consensus_to_structured_text
 from ..segment import (enforce_min_duration,
                        get_config, parse_human_transcript_to_srt_segments,
-                       insert_tag_events, place_tag_cues, relieve_fast_cues,
+                       chain_cues, insert_tag_events, place_tag_cues,
+                       relieve_fast_cues, segment_by_sentence,
                        repair_cue_breaks, speech_only,
                        resolve_overlaps, run_iterative_merging,
                        set_config, set_language, split_long_segments, split_unclean_cues,
@@ -386,20 +387,20 @@ class PipelineRunner(RobustStagesMixin):
                 stage="segmentation",
                 message=f"Preserving {len(segments)} cues from input SRT (no re-merging)."))
         else:
-            # Lines too long for one cue (or on screen too long) are split
-            # first, so the merger can still pair the pieces with neighbours.
-            segments = split_long_segments(initial_segments)
-            segments = run_iterative_merging(segments)
-            segments = split_long_segments(segments)
+            # A sentence at a time: the fewest cues that fit, broken at
+            # punctuation, pauses and clean phrase boundaries.
+            segments = segment_by_sentence(initial_segments)
             segments = split_unclean_cues(segments)
             if proposed_tags:
                 segments = insert_tag_events(segments, proposed_tags)
             segments = place_tag_cues(segments, events=tag_events,
                                       min_ms=seg_cfg.min_cue_ms)
             segments = resolve_overlaps(segments)
+            segments = chain_cues(segments)
             segments = enforce_min_duration(segments, seg_cfg.min_cue_ms)
             segments = repair_cue_breaks(segments)
             segments = relieve_fast_cues(segments)
+            segments = chain_cues(segments)
             segments = resolve_overlaps(segments)
             # Last: the minimum duration again, since the gap rule may have
             # trimmed a cue by a millisecond or two.
