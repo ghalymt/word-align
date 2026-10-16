@@ -4,8 +4,9 @@ Each job leaves ``<name>_review.json`` beside its subtitles. After you
 correct the subtitles, save the corrected file next to it as
 ``<name>_corrected.srt`` (or ``<name>.corrected.srt``). This module labels
 every reviewed cue "needed a fix" when the corrected file changed its words,
-moved its start by more than 150 ms or ended it more than 150 ms sooner (a
-cue left on screen longer is a style choice, not a fix), then fits the logistic
+moved its start by more than 150 ms or ended it more than 150 ms before its
+last word was over (how long a cue stays up, or how the words are cut into
+cues, is a style choice, not a fix), then fits the logistic
 weights (shrunk towards the defaults, so a few jobs cannot overfit) and
 saves them to ``~/.wordalign/triage_weights.json``, which every later run
 loads.
@@ -50,8 +51,8 @@ def label_cues(cues: Sequence[Dict], corrected: Sequence[Dict]) -> List[int]:
     """1 if the corrected file fixed the cue, else 0.
 
     A fix is a changed, removed or added word inside the cue, a start moved
-    by more than ``MOVE_TOLERANCE_S``, or an end brought forward by more
-    than that. The words of both files are aligned as one stream, so
+    by more than ``MOVE_TOLERANCE_S``, or an end cut more than that before
+    the cue's last word was over. The words of both files are aligned as one stream, so
     cutting the same words into different cues (a style choice) is not a
     fix, and neither is a cue left on screen longer.
     """
@@ -94,7 +95,11 @@ def label_cues(cues: Sequence[Dict], corrected: Sequence[Dict]) -> List[int]:
                 labels[k] = 1
         j = mapped.get(idx[-1])
         if j is not None and (j == len(theirs) - 1 or theirs[j + 1][0] != theirs[j][0]):
-            if float(c["end"]) - corrected[theirs[j][0]]["end"] > MOVE_TOLERANCE_S:
+            # Only an end cut before the last word was over counts: how long
+            # a cue stays up after its words is a style choice.
+            spoken = [w.get("end") for w in c.get("words") or [] if w.get("end") is not None]
+            last_end = float(spoken[-1]) if spoken else float(c["end"])
+            if last_end - corrected[theirs[j][0]]["end"] > MOVE_TOLERANCE_S:
                 labels[k] = 1
     return labels
 
