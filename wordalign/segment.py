@@ -867,6 +867,9 @@ FAST_PIECE_COST = 1.0
 # Pause between two words: every 50 ms is one point of bonus for a cue
 # break there, up to PAUSE_BONUS_MAX.
 PAUSE_BONUS_MAX = 12.0
+# Bonus for a cue break where the transcript itself starts a new line: an
+# editor's line breaks mark phrases.
+LINE_CUT_BONUS = 10.0
 
 
 def _ms(seg: Dict, key: str) -> int:
@@ -949,6 +952,7 @@ def _split_segment(seg: Dict) -> List[Dict]:
         cum.append(cum[-1] + (1 if flag else 0))
     starts = [w.get("start") for w in words]
     ends = [w.get("end") for w in words]
+    line_cuts = set(seg.get("line_cuts") or ())
 
     def span_ms(wa: int, wb: int) -> int:
         s = next((x for x in starts[wa:wb] if x is not None), None)
@@ -962,6 +966,8 @@ def _split_segment(seg: Dict) -> List[Dict]:
                 and ends[before] is not None and starts[after] is not None:
             pause = (starts[after] - ends[before]) * 1000.0
             cost -= max(0.0, min(PAUSE_BONUS_MAX, pause / 50.0))
+        if a in line_cuts:
+            cost -= LINE_CUT_BONUS
         return cost
 
     n = len(tokens)
@@ -1009,7 +1015,8 @@ def _split_segment(seg: Dict) -> List[Dict]:
     pieces = []
     for a, b in reversed(bounds):
         piece = dict(seg, text=balance_block_enhanced(" ".join(tokens[a:b])),
-                     words=words[cum[a]:cum[b]])
+                     words=words[cum[a]:cum[b]],
+                     line_cuts=[c - a for c in line_cuts if a < c < b])
         _retime(piece)
         pieces.append(piece)
     return pieces
@@ -1028,10 +1035,16 @@ def _sentence_units(segments: List[Dict]) -> List[Dict]:
             units.append(cur)
             cur = None
 
+    def joined_text(a: Dict, b: Dict) -> Tuple[str, List[int]]:
+        n = len(_tokenize(a["text"]))
+        cuts = list(a.get("line_cuts") or ()) + [n] + [n + c for c in (b.get("line_cuts") or ())]
+        return f"{_flat(a['text'])} {_flat(b['text'])}", cuts
+
     for seg in segments:
         if seg.get("tag"):
             if cur is not None and not has_terminal_punctuation(cur["text"]):
-                cur = dict(cur, text=f"{_flat(cur['text'])} {_flat(seg['text'])}")
+                text, cuts = joined_text(cur, seg)
+                cur = dict(cur, text=text, line_cuts=cuts)
                 continue
             close()
             units.append(seg)
@@ -1042,7 +1055,8 @@ def _sentence_units(segments: List[Dict]) -> List[Dict]:
         if cur is None:
             cur = dict(seg, text=_flat(seg["text"]))
         else:
-            cur = _joined(cur, seg, f"{_flat(cur['text'])} {_flat(seg['text'])}", [cur, seg])
+            text, cuts = joined_text(cur, seg)
+            cur = dict(_joined(cur, seg, text, [cur, seg]), line_cuts=cuts)
         if has_terminal_punctuation(seg["text"]) and not ends_with_nonterminal_abbreviation(seg["text"]):
             close()
     close()
