@@ -1655,9 +1655,10 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
         wa = cum[k]
         if k == len(ta) or wa == 0 or wa == len(words):
             continue
-        last, first = words[wa - 1], words[wa]
-        if last.get("end") is None or first.get("start") is None:
+        left_words, right_words = _timed_words(words[:wa]), _timed_words(words[wa:])
+        if not left_words or not right_words:
             continue
+        last, first = left_words[-1], right_words[0]
         brk = break_cost(tokens[max(0, k - 3):k], tokens[k:k + 3], _language)
         if mode == "break":
             if brk >= CLEAN_BREAK_LIMIT or brk > old_brk - 5:
@@ -1698,9 +1699,9 @@ def _resplit_pair(a: Dict, b: Dict, mode: str = "speed") -> Optional[Tuple[Dict,
     _, k, a_end, b_start = best
     wa = cum[k]
     new_a = dict(a, text=balance_block_enhanced(" ".join(tokens[:k])), words=words[:wa],
-                 end=ms_to_time(a_end), end_source=words[wa - 1].get("source"))
+                 end=ms_to_time(a_end), end_source=_timed_words(words[:wa])[-1].get("source"))
     new_b = dict(b, text=balance_block_enhanced(" ".join(tokens[k:])), words=words[wa:],
-                 start=ms_to_time(b_start), start_source=words[wa].get("source"))
+                 start=ms_to_time(b_start), start_source=_timed_words(words[wa:])[0].get("source"))
     return new_a, new_b
 
 
