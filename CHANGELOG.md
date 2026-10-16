@@ -105,7 +105,9 @@ docs/benchmark.md).
 - `--doctor` starts MFA the same way instead of only finding it, so a
   broken MFA is reported.
 - MFA only fills words that have no time; a word already timed by an engine,
-  the aligner or a voter is no longer re-aligned (and overwritten).
+  the aligner or a voter is no longer re-aligned (and overwritten). Each gap
+  is aligned with three timed words of context on each side, which fixed
+  gap words being pinned to the start of their slice (0.5 s early).
 - A forced-aligned word no longer vanishes from the word-level SRT when the
   aligner gives it no length.
 
