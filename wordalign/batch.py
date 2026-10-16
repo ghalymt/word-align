@@ -73,8 +73,10 @@ def _already_done(cfg) -> bool:
     base = cfg.resolve_output_base()
     wanted = [ext for ext, on in (("srt", export.sentence_srt),
                                   ("vtt", export.vtt), ("ass", export.ass)) if on]
-    return bool(wanted) and all(
-        Path(f"{base}_sentence_level.{ext}").exists() for ext in wanted)
+    names = [f"{base}_sentence_level.{ext}" for ext in wanted]
+    if export.sentence_srt:
+        names.append(f"{base}_final.srt")
+    return bool(wanted) and all(Path(name).exists() for name in names)
 
 
 def run_batch(argv: List[str], run_one: Callable, parse_args: Callable) -> int:

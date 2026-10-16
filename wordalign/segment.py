@@ -1151,6 +1151,51 @@ def _fold_tag(out: List[Dict], segments: List[Dict], j: int, text: str,
     return False
 
 
+def insert_tag_events(segments: List[Dict], events) -> List[Dict]:
+    """Add detected sound events (``start``/``end`` seconds, ``tag``) as
+    ``tag`` segments at their place in time, for :func:`place_tag_cues` to
+    fit around the speech. Used when there is no transcript to place them."""
+    if not events:
+        return segments
+    out = list(segments)
+    for ev in sorted(events, key=lambda e: float(e["start"])):
+        start = int(float(ev["start"]) * 1000)
+        end = int(float(ev["end"]) * 1000)
+        mid = (start + end) // 2
+        k = 0
+        while k < len(out) and (_ms(out[k], "start") + _ms(out[k], "end")) // 2 <= mid:
+            k += 1
+        out.insert(k, {"index": 0, "start": ms_to_time(start), "end": ms_to_time(end),
+                       "text": f"[{ev['tag']}]", "speaker": None, "tag": True, "words": [],
+                       "event": (start, end), "start_source": "tag", "end_source": "tag"})
+    return out
+
+
+def is_sound_tag(tag: str) -> bool:
+    """A ``[sound description]`` -- not a marker such as ``[?]`` or
+    ``[inaudible 00:01:02]`` that stands in for words."""
+    inner = tag.strip()[1:-1] if tag.strip().startswith("[") else tag
+    return "?" not in inner and not _NOT_SOUND.search(inner)
+
+
+def speech_only(segments: List[Dict]) -> List[Dict]:
+    """The cues without sound tags: tag cues are dropped and tags sharing a
+    cue with words are taken out (markers such as ``[?]`` stay)."""
+    out: List[Dict] = []
+    for seg in segments:
+        if _is_tag(seg) and all(is_sound_tag(t) for t in re.findall(r"\[[^\]]*\]", seg["text"])):
+            continue
+        tokens = [t for t in _tokenize(seg["text"])
+                  if not (_TAGS_ONLY_RE.match(t) and is_sound_tag(t))]
+        if not tokens:
+            continue
+        text = " ".join(tokens)
+        if text != _flat(seg["text"]):
+            seg = dict(seg, text=balance_block_enhanced(text))
+        out.append(seg)
+    return out
+
+
 def place_tag_cues(segments: List[Dict], events=None,
                    min_ms: Optional[int] = None) -> List[Dict]:
     """Time the transcript's ``[tag]`` lines (``tag`` segments from
@@ -1183,7 +1228,8 @@ def place_tag_cues(segments: List[Dict], events=None,
         nxt = segments[j] if j < len(segments) else None
         lo = _ms(prev, "end") + OVERLAP_GAP_MS if prev else 0
         hi = (_ms(nxt, "start") - OVERLAP_GAP_MS) if nxt else lo + TAG_DEFAULT_MS
-        event = _matching_event(events, _tag_labels(text), lo, hi)
+        event = (group[0].get("event")
+                 or _matching_event(events, _tag_labels(text), lo, hi))
         if hi - lo >= min_ms:
             if event:
                 start = min(max(event[0], lo), hi - min_ms)

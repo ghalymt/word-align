@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 GOLDEN = Path(__file__).resolve().parent / "golden"
 REGEN = os.environ.get("WORDALIGN_REGEN_GOLDEN") == "1"
 # Outputs compared per scenario (the manifest has timestamps, so it is not).
-OUTPUT_SUFFIXES = ("_sentence_level.srt", "_word_level.srt",
+OUTPUT_SUFFIXES = ("_sentence_level.srt", "_final.srt", "_word_level.srt",
                    "_sentence_level.vtt", "_sentence_level.ass",
                    "_transcript.txt")
 

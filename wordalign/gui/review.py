@@ -8,7 +8,7 @@ one's audio, and saves what the reviewer did:
   (accepted as is, or edited); reloaded when the review is reopened.
 * ``<name>_review_log.jsonl`` -- an append-only log of every save, with the
   text before and after, for later analysis.
-* ``<name>_corrected.srt`` -- the subtitles with the edits applied. The
+* ``<name>_corrected.srt`` -- the final subtitles with the edits applied. The
   pipeline's own files are never changed. This is also the file
   ``wordalign-bench fit-triage`` learns from.
 
@@ -155,7 +155,10 @@ def _clean_edit(raw, cue: Dict) -> Optional[Dict]:
 
 
 def _source_srt(base: Path) -> Optional[Path]:
-    for name in (f"{base.name}_sentence_level.srt", f"{base.name}.srt"):
+    # The review covers the final cues (speech and tags), so corrections
+    # apply to the final SRT; older jobs only have the sentence level.
+    for name in (f"{base.name}_final.srt", f"{base.name}_sentence_level.srt",
+                 f"{base.name}.srt"):
         p = base.with_name(name)
         if p.is_file():
             return p
