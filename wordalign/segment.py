@@ -732,8 +732,8 @@ def _resolve_overlaps_once(segments: List[Dict]) -> int:
         cur_end = time_to_ms(cur["end"])
         nxt_start = time_to_ms(nxt["start"])
         nxt_end = time_to_ms(nxt["end"])
-        if cur_end <= nxt_start:
-            continue  # no overlap
+        if nxt_start - cur_end >= OVERLAP_GAP_MS:
+            continue  # no overlap, and the minimum gap is kept
 
         end_is_vosk = cur.get("end_source") == "Vosk"
         start_is_vosk = nxt.get("start_source") == "Vosk"
@@ -1431,6 +1431,50 @@ def repair_cue_breaks(segments: List[Dict]) -> List[Dict]:
     return segs
 
 
+# A cue still faster than TARGET_CPS may take this much on-screen time from
+# a slower neighbour it touches (the neighbour shows a little later or ends a
+# little sooner), as long as the neighbour stays at or under TARGET_CPS.
+MAX_SPEED_BORROW_MS = 250
+
+
+def _borrow_for_speed(segs: List[Dict], target_cps: float) -> int:
+    lent = 0
+    for i, seg in enumerate(segs):
+        if _is_tag(seg):
+            continue
+        chars = len(_flat(seg["text"]))
+        need = int(chars * 1000.0 / target_cps) - _dur(seg)
+        if need <= 0:
+            continue
+        for side in ("next", "prev"):
+            j = i + 1 if side == "next" else i - 1
+            if need <= 0 or j < 0 or j >= len(segs):
+                continue
+            other = segs[j]
+            if other.get("dash_cue"):
+                continue
+            gap = (_ms(other, "start") - _ms(seg, "end") if side == "next"
+                   else _ms(seg, "start") - _ms(other, "end"))
+            if gap > OVERLAP_GAP_MS:
+                continue
+            o_chars = len(_flat(other["text"]))
+            limit = _dur(other) - _min_cue_ms
+            if not _is_tag(other):
+                limit = min(limit, _dur(other) - int(o_chars * 1000.0 / target_cps))
+            take = min(need, MAX_SPEED_BORROW_MS, limit, _max_duration_ms - _dur(seg))
+            if take <= 0:
+                continue
+            if side == "next":
+                seg["end"] = ms_to_time(_ms(seg, "end") + take)
+                other["start"] = ms_to_time(_ms(seg, "end") + OVERLAP_GAP_MS)
+            else:
+                seg["start"] = ms_to_time(_ms(seg, "start") - take)
+                other["end"] = ms_to_time(_ms(seg, "start") - OVERLAP_GAP_MS)
+            need -= take
+            lent += 1
+    return lent
+
+
 def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
                       max_cps: float = MAX_CPS) -> List[Dict]:
     """Slow down cues that read faster than *target_cps*.
@@ -1487,8 +1531,11 @@ def relieve_fast_cues(segments: List[Dict], target_cps: float = TARGET_CPS,
             merged += 1
         i += 1
     ease(out)
+    lent = _borrow_for_speed(out, target_cps)
     if moved:
         print(f"[ok] Moved {moved} cue boundary(ies) to even out reading speed")
+    if lent:
+        print(f"[ok] {lent} fast cue(s) took a little time from a slower neighbour")
     if merged:
         print(f"[ok] Joined {merged} fast cue(s) with a neighbour")
     return out

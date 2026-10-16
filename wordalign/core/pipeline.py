@@ -386,6 +386,9 @@ class PipelineRunner(RobustStagesMixin):
             segments = repair_cue_breaks(segments)
             segments = relieve_fast_cues(segments)
             segments = resolve_overlaps(segments)
+            # Last: the minimum duration again, since the gap rule may have
+            # trimmed a cue by a millisecond or two.
+            segments = enforce_min_duration(segments, seg_cfg.min_cue_ms)
         return segments
 
     def _stage_enabled(self, stage: str) -> bool:
