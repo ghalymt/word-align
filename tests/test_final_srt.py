@@ -1,4 +1,4 @@
-"""The final SRT: GoTranscript-style layout, every word and tag, tags clear of speech."""
+"""The final SRT: subtitle-standard layout, every word and tag, tags clear of speech."""
 import contextlib
 import io
 import sys
