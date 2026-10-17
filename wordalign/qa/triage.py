@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -53,9 +54,10 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "clipping": 0.4,
     "hallucination": 0.8,     # words the filter removed inside the cue
     "implausible": 0.8,       # share of words with impossible durations
+    "beside_tag": 1.8,        # applause / laughter / crosstalk in or next to the cue
 }
 CONDITIONS = ("overlap", "music", "crowd", "very_low_snr", "low_snr", "noise",
-              "narrowband", "clipping")
+              "narrowband", "clipping", "beside_tag")
 _REASON = {
     "overlap": "overlapping speakers",
     "music": "music under speech",
@@ -65,7 +67,10 @@ _REASON = {
     "noise": "background noise",
     "narrowband": "telephone-band audio",
     "clipping": "clipped (distorted) audio",
+    "beside_tag": "next to a sound tag: words under applause or laughter are often mistimed",
 }
+# A [sound tag] -- not a marker such as [?] or [inaudible 00:01:02].
+_SOUND_TAG_RE = re.compile(r"\[(?![^\]]*(?:\?|inaudible|unintelligible|\d\d:\d\d))[^\]]+\]", re.I)
 
 
 def weights_path() -> Path:
@@ -219,6 +224,10 @@ def triage_segments(segments: Sequence[Dict], words: Sequence[Dict],
             cue_words = [w for w in words if _overlaps(s0, s1, w.get("start"), w.get("end"))
                          and s0 - 0.01 <= (float(w["start"]) + float(w["end"])) / 2 <= s1 + 0.01]
         conds = list(conditions_at(s0, s1)) if conditions_at else []
+        near = [segments[j].get("text", "") for j in (k - 1, k, k + 1) if 0 <= j < len(segments)]
+        if any(_SOUND_TAG_RE.search(t or "") for t in near) \
+                and not _SOUND_TAG_RE.fullmatch((seg.get("text") or "").strip()):
+            conds.append("beside_tag")
         removed = sum(1 for r in removals if r.get("start") is not None
                       and s0 - 0.25 <= float(r["start"]) <= s1 + 0.25)
         tier, risk, est_error, reasons, feats = score_cue(

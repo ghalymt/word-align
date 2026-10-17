@@ -67,6 +67,7 @@ if QThread is not None:
                         result.transcript_docx_path,
                         result.audio_tags_srt_path,
                         result.combined_srt_path,
+                        result.final_srt_path,
                         result.job_manifest_path,
                     ) if p
                 ]

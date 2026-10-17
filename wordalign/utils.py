@@ -60,8 +60,8 @@ def ends_with_nonterminal_abbreviation(text: str) -> bool:
 
 def has_terminal_punctuation(text: str) -> bool:
     stripped = text.strip()
-    if stripped.endswith("--"):
-        return True
+    if _TRAILING_CLOSERS_RE.sub("", stripped).endswith("--"):
+        return True                     # broken off, maybe inside a quote: "I don't--"
     if not TERMINAL_PUNCT_PATTERN.search(stripped):
         return False
     # A trailing abbreviation ("...at St.") is not a sentence end.

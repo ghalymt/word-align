@@ -31,7 +31,8 @@ def generate_manifest(audio_path: str,
                       stage_durations: Optional[dict[str, float]] = None,
                       warnings: Optional[list[str]] = None,
                       word_stats: Optional[dict[str, Any]] = None,
-                      output_files: Optional[list[str]] = None) -> dict:
+                      output_files: Optional[list[str]] = None,
+                      final_check: Optional[dict[str, Any]] = None) -> dict:
     """Build a job manifest dict."""
     from .fingerprint import fingerprint_audio
 
@@ -61,6 +62,9 @@ def generate_manifest(audio_path: str,
         "word_stats": word_stats or {},
         "output_files": output_files or [],
     }
+    if final_check:
+        # Rule check of the final SRT (layout, timing, words and tags).
+        manifest["final_check"] = final_check
 
     # Add GPU info if available
     try:

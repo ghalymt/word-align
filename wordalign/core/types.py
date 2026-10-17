@@ -86,6 +86,7 @@ class PipelineResult:
     transcript_docx_path: Optional[str] = None
     audio_tags_srt_path: Optional[str] = None
     combined_srt_path: Optional[str] = None
+    final_srt_path: Optional[str] = None
     aligned_words: list[WordResult] = field(default_factory=list)
     segments: list[SegmentResult] = field(default_factory=list)
     consensus: Optional[list[WordResult]] = None
@@ -111,6 +112,7 @@ class PipelineResult:
             self.transcript_docx_path,
             self.audio_tags_srt_path,
             self.combined_srt_path,
+            self.final_srt_path,
             self.review_json_path,
             self.job_manifest_path,
         ) if p]

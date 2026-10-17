@@ -238,6 +238,9 @@ class PipelineConfig:
     max_lines: int = 2
     max_duration_ms: int = 7000
     min_cue_ms: int = 700                      # minimum on-screen time per cue
+    sync_starts: bool = True                   # cues never start before their words
+    chain_gap_ms: int = 1000                   # run on to the next cue across shorter pauses
+    lead_out_ms: int = 250                     # linger this long after a longer pause
     # Qwen3-ASR voter (runs out-of-process in its own venv; see qwen_engine).
     qwen_python: Optional[str] = field(
         default_factory=lambda: os.environ.get("WORDALIGN_QWEN_PYTHON"))
