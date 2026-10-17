@@ -1,6 +1,20 @@
 # Changelog
 
-## 2.2.1 — unreleased
+## 2.2.1 — 2026-10-17
+
+Subtitles you can deliver. Every run writes `<name>_final.srt`: every word
+and tag of the transcript, laid out by GoTranscript's rules and timed the way
+a reviewer finishes a job -- in sync with the speech first, the other rules
+as far as the speech allows.
+
+### Upgrade notes (behaviour changes)
+
+- Cues now start with their first word and run on to the next cue across
+  short pauses; a fast short sentence keeps its own cue even under
+  `--min-cue-ms`. `--no-sync-starts`, `--chain-gap-ms 0` and
+  `--lead-out-ms 0` bring back the 2.2.0 timing.
+- `_sentence_level.srt` (and VTT/ASS) carry the speech only; the editor's
+  tags are in `_final.srt` (and `_combined.srt` with `--tags`).
 
 ### Added
 
@@ -42,10 +56,10 @@
 - Transcript lines too long for `--max-lines` × `--cpl`, or on screen longer
   than `--max-duration-ms`, are split at their best break instead of being
   left as one long line; cues never merge past the duration limit.
-- Short cues grow backwards into the pause before them as well as forwards,
-  then borrow a few ms from a neighbour or join it; fast cues take the free
-  time around them, move a boundary to a better word, or join a neighbour.
-  Every cue keeps at least 1 ms from the next.
+- Short and fast cues use the free time after them and can move a boundary
+  to a better word; with `--no-sync-starts` they may also start early,
+  borrow a few ms from a neighbour or join it. Every cue keeps at least 1 ms
+  from the next.
 - Cue boundaries that split a phrase are moved to a cleaner word nearby, or
   to punctuation within the same two cues; a boundary at a sentence end is
   never moved.
@@ -58,6 +72,10 @@
 
 - The WhisperX worker finds the alignment model in the models folder or its
   `hub/` subfolder (it only looked in the first).
+- A transcript line that is only punctuation (a closing quote on its own
+  line) no longer gives a cue a guessed start; it joins the word before it.
+- A broken-off quote (`"I don't--"`) ends a sentence, so the next sentence
+  starts a new cue.
 
 ## 2.2.0 — 2026-10-15
 
