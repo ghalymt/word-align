@@ -3,7 +3,7 @@
 ## 2.2.1 — 2026-10-17
 
 Subtitles you can deliver. Every run writes `<name>_final.srt`: every word
-and tag of the transcript, laid out by GoTranscript's rules and timed the way
+and tag of the transcript, laid out by standard subtitling rules and timed the way
 a reviewer finishes a job -- in sync with the speech first, the other rules
 as far as the speech allows.
 
@@ -23,12 +23,12 @@ as far as the speech allows.
   within the layout and timing rules, checked when it is written (summary in
   the log, details under `final_check` in the job manifest, warnings for
   anything left). See *The final SRT* in the user guide.
-- **GoTranscript line-break rules for English** (`wordalign/linebreak.py`):
+- **Subtitle line-break rules for English** (`wordalign/linebreak.py`):
   subject + verb, auxiliaries, phrasal verbs, verb + object pronoun, names
   and titles, numbers and units stay together; breaks prefer sentence ends,
   then clause punctuation, then conjunctions and prepositions.
 
-- **Timing in a reviewer's style** (measured on a finished GoTranscript job):
+- **Timing in a reviewer's style** (measured on a finished, human-reviewed job):
   cues start with their first word (`--no-sync-starts` lets a short cue start
   earlier to reach `--min-cue-ms`), run on to the next cue across pauses up
   to 1 s (`--chain-gap-ms`), and linger 250 ms after a longer pause

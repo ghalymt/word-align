@@ -4,7 +4,7 @@
 a good place to break, positive a bad one, in the same units as the
 line-length imbalance the balancer also weighs (characters).
 
-English follows the GoTranscript / broadcast rules; keep together:
+English follows standard subtitling (broadcast) line-break rules; keep together:
 
 * a subject pronoun and its verb ("we | wake up")
 * auxiliaries, modals and the verb ("have | been", "doesn't | help")

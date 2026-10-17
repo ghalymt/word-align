@@ -180,7 +180,7 @@ After a successful run, you'll find:
 - at most `--max-lines` lines of `--cpl` characters (spaces and punctuation
   count), one line whenever the text fits one, line breaks that keep phrases
   together (subject + verb, auxiliaries, phrasal verbs, names, numbers and
-  units — GoTranscript's rules for English), sound tags at a cue's edge on a
+  units — standard subtitling rules for English), sound tags at a cue's edge on a
   line of their own;
 - cues of 1 to 7 s (`--min-cue-ms`, `--max-duration-ms`) with at least
   1 ms between them and no overlaps; long transcript lines are split at their

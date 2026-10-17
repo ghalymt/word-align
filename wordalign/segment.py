@@ -75,7 +75,7 @@ def set_config(config) -> None:
 
 
 def set_language(language: Optional[str]) -> str:
-    """Choose the line-break rules (English keeps GoTranscript's); returns the old value."""
+    """Choose the line-break rules (English has its own, see linebreak.py); returns the old value."""
     global _language
     previous = _language
     _language = (language or "en").lower()
