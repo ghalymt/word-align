@@ -70,11 +70,12 @@ class TestNonAsciiOnWindowsConsole(unittest.TestCase):
         import os
         import subprocess
         env = dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONUTF8="0")
-        out = subprocess.run([sys.executable, str(ROOT / "scripts" / "release_notes.py"),
-                              __version__], capture_output=True, env=env, timeout=60)
-        self.assertEqual(out.returncode, 0, out.stderr.decode("utf-8", "replace"))
-        text = out.stdout.decode("utf-8")
-        self.assertIn("μ-law", text)
+        # 2.2.0's notes hold a character cp1252 cannot encode ("μ-law").
+        for version, expected in (("2.2.0", "μ-law"), (__version__, "")):
+            out = subprocess.run([sys.executable, str(ROOT / "scripts" / "release_notes.py"),
+                                  version], capture_output=True, env=env, timeout=60)
+            self.assertEqual(out.returncode, 0, out.stderr.decode("utf-8", "replace"))
+            self.assertIn(expected, out.stdout.decode("utf-8"))
 
 
 if __name__ == "__main__":
